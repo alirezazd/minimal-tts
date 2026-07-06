@@ -4,10 +4,9 @@ A local, high-quality read-aloud app. One glass window: paste text, press play,
 watch it read to you — sentence and word highlighted in sync with the speech.
 No cloud, no accounts, no telemetry. Everything runs and stays on your machine.
 
-<!-- DEMO VIDEO: to embed an inline player with audio, edit this file on github.com,
-     delete this comment and the link line below, then drag assets/demo.mp4 into the
-     editor on this spot — GitHub uploads it and inserts a <video> player. -->
-**▶ [Watch the demo — with audio](assets/demo.mp4)**
+
+https://github.com/user-attachments/assets/1c05f1bd-9c2d-42d6-b651-c3cae174cfff
+
 
 - **[Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)** — one of the
   top-rated open TTS models (Apache-2.0), 24 kHz output
