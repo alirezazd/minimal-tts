@@ -1,0 +1,18 @@
+[project]
+name = "minimal-tts"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "en-core-web-sm",
+    "fastapi>=0.139.0",
+    "kokoro>=0.9.4",
+    "numpy>=2.5.1",
+    "soundfile>=0.14.0",
+    "torch>=2.12.1",
+    "uvicorn[standard]>=0.50.2",
+]
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

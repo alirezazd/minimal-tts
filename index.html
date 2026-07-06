@@ -1,0 +1,895 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minimal TTS</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%23e7e9ee'%3E%3Crect x='1' y='6' width='2' height='4' rx='1'/%3E%3Crect x='5' y='3' width='2' height='10' rx='1'/%3E%3Crect x='9' y='5' width='2' height='6' rx='1'/%3E%3Crect x='13' y='7' width='2' height='2' rx='1'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a0b0d;
+    --border: #23262c;
+    --text: #e7e9ee;
+    --muted: #7d838d;
+    --reader: #9aa1ac;
+    --error: #f28b82;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    justify-content: center;
+  }
+  main {
+    width: min(880px, calc(100% - 48px));
+    padding: 36px 0 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  header { display: flex; align-items: center; gap: 10px; user-select: none; }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+  header span#engine { font-size: 12.5px; color: var(--muted); }
+  #cuda {  /* neon badge, shown only when synthesis runs on CUDA */
+    display: none;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px 3px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(118, 185, 0, .35);
+    background: rgba(118, 185, 0, .07);
+    color: #b6e56b;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .09em;
+    text-shadow: 0 0 6px rgba(118, 185, 0, .9), 0 0 16px rgba(118, 185, 0, .45);
+    animation: cudaGlow 3.5s ease-in-out infinite;
+  }
+  #cuda.on { display: inline-flex; }
+  #cuda svg {
+    stroke: #b6f05c;
+    filter: drop-shadow(0 0 3px rgba(118, 185, 0, .9)) drop-shadow(0 0 8px rgba(118, 185, 0, .4));
+  }
+  @keyframes cudaGlow {
+    0%, 100% { box-shadow: 0 0 6px rgba(118, 185, 0, .12), inset 0 0 8px rgba(118, 185, 0, .05); }
+    50%      { box-shadow: 0 0 15px rgba(118, 185, 0, .3),  inset 0 0 12px rgba(118, 185, 0, .1); }
+  }
+  @media (prefers-reduced-motion: reduce) { #cuda { animation: none; } }
+  .hint { margin-left: auto; color: var(--muted); font-size: 12px; user-select: none; }
+  button { font: inherit; border: none; cursor: pointer; background: none; color: var(--text); }
+  :is(select, input[type="range"], button):focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
+
+  /* ---- the one window ---------------------------------------------------- */
+  #player {
+    position: relative;
+    height: calc(100vh - 170px);
+    min-height: 420px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, .09);
+    overflow: hidden;
+    background: rgba(14, 16, 19, .5);
+    box-shadow: 0 24px 60px -24px rgba(0, 0, 0, .6), 0 4px 18px rgba(0, 0, 0, .35);
+    transition: border-color .2s;
+  }
+  #player:focus-within { border-color: rgba(255, 255, 255, .18); }
+  #player::after {  /* specular rim — light catching the top edge of the pane */
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, .09),
+      inset 0 0 0 .5px rgba(255, 255, 255, .03);
+  }
+  #glow {
+    position: absolute;
+    inset: -12%;
+    filter: blur(44px) saturate(1.5);
+    opacity: .35;
+  }
+  #glow::before {  /* base tint so the whole rectangle is always lit */
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg,
+      rgba(129,140,248,.14) 0%, rgba(160,136,250,.12) 25%, rgba(192,132,252,.11) 50%,
+      rgba(124,160,250,.12) 75%, rgba(56,189,248,.14) 100%);
+  }
+  /* eased multi-stop falloffs quantize far less than two-stop ramps */
+  .blob { position: absolute; border-radius: 50%; will-change: transform; }
+  .b1 {
+    width: 70%; height: 85%; left: -10%; top: -15%;
+    background: radial-gradient(closest-side,
+      rgba(129,140,248,.5) 0%, rgba(129,140,248,.34) 35%, rgba(129,140,248,.18) 58%,
+      rgba(129,140,248,.07) 78%, transparent 92%);
+    animation: drift1 52s ease-in-out infinite alternate;
+  }
+  .b2 {
+    width: 65%; height: 80%; right: -8%; top: 5%;
+    background: radial-gradient(closest-side,
+      rgba(192,132,252,.46) 0%, rgba(192,132,252,.31) 35%, rgba(192,132,252,.16) 58%,
+      rgba(192,132,252,.06) 78%, transparent 92%);
+    animation: drift2 67s ease-in-out infinite alternate;
+  }
+  .b3 {
+    width: 75%; height: 70%; left: 15%; bottom: -20%;
+    background: radial-gradient(closest-side,
+      rgba(56,189,248,.42) 0%, rgba(56,189,248,.28) 35%, rgba(56,189,248,.15) 58%,
+      rgba(56,189,248,.06) 78%, transparent 92%);
+    animation: drift3 83s ease-in-out infinite alternate;
+  }
+  @keyframes drift1 {
+    0%   { transform: translate(0, 0) scale(1); }
+    50%  { transform: translate(45%, 30%) scale(1.15); }
+    100% { transform: translate(90%, 5%) scale(.95); }
+  }
+  @keyframes drift2 {
+    0%   { transform: translate(0, 0) scale(1.05); }
+    50%  { transform: translate(-40%, 40%) scale(.9); }
+    100% { transform: translate(-70%, -10%) scale(1.2); }
+  }
+  @keyframes drift3 {
+    0%   { transform: translate(0, 0) scale(1); }
+    50%  { transform: translate(-25%, -35%) scale(1.18); }
+    100% { transform: translate(30%, -60%) scale(.92); }
+  }
+  @media (prefers-reduced-motion: reduce) { .blob { animation: none; } }
+  #glass {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: rgba(13, 15, 18, .38);
+    backdrop-filter: blur(26px) saturate(1.25);
+    -webkit-backdrop-filter: blur(26px) saturate(1.25);
+  }
+  #glass::before {  /* film grain dither — breaks up 8-bit gradient banding */
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: .05;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+  }
+  #text, #reader {
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 22px 24px 14px;
+    font-size: 16px;
+    line-height: 1.9;
+    font-family: inherit;
+  }
+  #text {
+    position: relative;  /* paints above the grain layer */
+    width: 100%;
+    resize: none;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+  }
+  #text::placeholder { color: var(--muted); }
+  #reader {
+    position: relative;
+    z-index: 0;  /* own stacking context so #hl can sit behind the text */
+    display: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    color: var(--reader);
+    white-space: pre-wrap;
+    /* permanent compositing layer: keeps text rasterization identical during
+       and after transitions/smooth-scroll, so brightness never "pops" at rest */
+    transform: translateZ(0);
+  }
+  #player.reading #text { display: none; }
+  #player.reading #reader { display: block; }
+  #tidy {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    z-index: 2;
+    display: none;
+    padding: 5px 13px;
+    font-size: 12.5px;
+    color: var(--muted);
+    background: rgba(255, 255, 255, .05);
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 999px;
+    transition: color .15s, border-color .15s;
+  }
+  #tidy:hover { color: var(--text); border-color: rgba(255, 255, 255, .28); }
+  #tidy.show { display: block; }
+  #reader::-webkit-scrollbar { width: 8px; }
+  #reader::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 4px; }
+  #reader::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.22); }
+  .sent {
+    cursor: pointer;
+    border-radius: 6px;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+  .sent:hover { color: #cfd4db; }  /* instant, like a hyperlink */
+  .sent.active {
+    background: rgba(255, 255, 255, .06);
+    color: var(--text);
+  }
+  .sent.fading {  /* applied by JS only when a sentence finishes being read */
+    transition: background .9s ease-out, color .9s ease-out;
+  }
+  .w {
+    border-radius: 4px;
+    transition: color .4s ease-out, text-shadow .4s ease-out;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+  .w.now {
+    color: #dbe3ff;
+    text-shadow: 0 0 10px rgba(129, 140, 248, .35);
+    transition: color .06s, text-shadow .06s;
+  }
+  #hl {  /* the one floating highlight rectangle — glides and resizes between words */
+    position: absolute;
+    left: 0;
+    top: 0;
+    border-radius: 5px;
+    background: rgba(129, 140, 248, .2);
+    box-shadow: 0 0 14px rgba(129, 140, 248, .25);
+    opacity: 0;
+    pointer-events: none;
+    z-index: -1;
+    will-change: transform, width;
+    transition:
+      transform .15s cubic-bezier(.25, .7, .3, 1),
+      width .15s cubic-bezier(.25, .7, .3, 1),
+      height .15s ease-out,
+      opacity .22s ease-out;
+  }
+  #hl.snap { transition: opacity .22s ease-out; }
+
+  /* ---- bottom bar --------------------------------------------------------- */
+  .player-row {
+    position: relative;  /* paints above the grain layer */
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px 12px;
+    flex-wrap: wrap;
+  }
+  #toggle, #stop, #download {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    flex: none;
+    transition: background .15s;
+  }
+  :is(#toggle, #stop, #download):hover { background: rgba(255, 255, 255, .08); }
+  :is(#toggle, #stop, #download) svg { fill: var(--text); }
+  #stop { display: none; }
+  #player.reading #stop { display: flex; }
+  select {
+    appearance: none;
+    background: rgba(255, 255, 255, .05) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237d838d' fill='none' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 12px center;
+    color: var(--text);
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: 9px;
+    padding: 7px 32px 7px 12px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color .15s;
+  }
+  select:hover, select:focus { border-color: rgba(255, 255, 255, .22); }
+  select { color-scheme: dark; }
+  select option, select optgroup {  /* the native popup doesn't inherit the glass styling */
+    background: #14161a;
+    color: var(--text);
+  }
+  select optgroup { color: var(--muted); }
+  .speed { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .speed output { min-width: 36px; }
+  input[type="range"] { appearance: none; background: transparent; cursor: pointer; height: 24px; }
+  input[type="range"]::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: var(--range-bg, rgba(255,255,255,.12)); }
+  input[type="range"]::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--text); margin-top: -4.5px; }
+  input[type="range"]::-moz-range-track { height: 3px; border-radius: 2px; background: var(--range-bg, rgba(255,255,255,.12)); }
+  input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: none; border-radius: 50%; background: var(--text); }
+  #speedRange { width: 90px; }
+  #progress { flex: 1; min-width: 90px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.09); overflow: hidden; }
+  #progressFill { height: 100%; width: 0; background: linear-gradient(90deg, #818cf8, #c084fc, #38bdf8); }
+  #time { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #status { color: var(--error); font-size: 13px; min-height: 20px; }
+  .spinner {
+    width: 13px; height: 13px;
+    border: 2px solid rgba(231, 233, 238, .25);
+    border-top-color: var(--text);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<main>
+  <header>
+    <h1>Minimal TTS</h1>
+    <span id="engine"></span>
+    <span id="cuda" title="Synthesis is running on your GPU">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke-width="1.4" stroke-linecap="round">
+        <rect x="4" y="4" width="8" height="8" rx="1.5"/>
+        <path d="M6.5 1.2v2M9.5 1.2v2M6.5 12.8v2M9.5 12.8v2M1.2 6.5h2M1.2 9.5h2M12.8 6.5h2M12.8 9.5h2"/>
+      </svg>CUDA</span>
+    <span class="hint">Ctrl+Enter read · Esc edit · Space · ← →</span>
+  </header>
+
+  <div id="player">
+    <div id="glow" aria-hidden="true">
+      <div class="blob b1"></div>
+      <div class="blob b2"></div>
+      <div class="blob b3"></div>
+    </div>
+    <div id="glass">
+      <button id="tidy" title="Fix PDF paste artifacts: join broken words, remove [n] citations, unwrap hard line breaks">Tidy</button>
+      <textarea id="text" placeholder="Type or paste text, then press Ctrl+Enter…" autofocus spellcheck="false" aria-label="Text to read"></textarea>
+      <div id="reader" aria-label="Read-along text"></div>
+      <div class="player-row">
+        <button id="toggle" title="Read" aria-label="Read"></button>
+        <button id="stop" title="Stop and edit (Esc)" aria-label="Stop and edit"></button>
+        <select id="voice" title="Voice" aria-label="Voice"></select>
+        <div class="speed" title="Speed (applies live, from the next sentence)">
+          <input type="range" id="speedRange" min="0.5" max="2" step="0.05" value="1" aria-label="Speed">
+          <output id="speedval">1.00×</output>
+        </div>
+        <div id="progress" aria-hidden="true"><div id="progressFill"></div></div>
+        <span id="time"></span>
+        <button id="download" title="Download Opus (Shift-click: WAV)" aria-label="Download audio"></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="status" role="status"></div>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const MAX_CHARS = 20000;
+  const ICONS = {
+    play:  '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M4.5 2.5a1 1 0 0 1 1.53-.85l8 5.5a1 1 0 0 1 0 1.7l-8 5.5A1 1 0 0 1 4.5 13.5z"/></svg>',
+    pause: '<svg width="15" height="15" viewBox="0 0 16 16"><rect x="3.5" y="2.5" width="3.4" height="11" rx="1.2"/><rect x="9.1" y="2.5" width="3.4" height="11" rx="1.2"/></svg>',
+    stop:  '<svg width="15" height="15" viewBox="0 0 16 16"><rect x="3.6" y="3.6" width="8.8" height="8.8" rx="1.6"/></svg>',
+    down:  '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M8 1.5a.9.9 0 0 1 .9.9v6l2-2a.9.9 0 1 1 1.27 1.27l-3.53 3.54a.9.9 0 0 1-1.28 0L3.83 7.67A.9.9 0 1 1 5.1 6.4l2 2v-6A.9.9 0 0 1 8 1.5z"/><path d="M2.5 13.2h11a.9.9 0 1 1 0 1.8h-11a.9.9 0 1 1 0-1.8z"/></svg>',
+  };
+  $('toggle').innerHTML = ICONS.play;
+  $('stop').innerHTML = ICONS.stop;
+  $('download').innerHTML = ICONS.down;
+
+  // --- persistence (never let storage failures kill the page) ------------
+  const saved = key => { try { return localStorage.getItem('mtts:' + key); } catch { return null; } };
+  const save = (key, val) => { try { localStorage.setItem('mtts:' + key, val); } catch {} };
+  $('text').value = saved('text') || '';
+  $('text').addEventListener('input', () => { save('text', $('text').value); preTidy = null; updateTidy(); });
+
+  // --- resume: remember the last-read sentence per exact text ---------------
+  const docHash = str => {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = (h * 33 ^ str.charCodeAt(i)) >>> 0;
+    return h.toString(36);
+  };
+  const saveResume = () => { if (docSource && curIdx > 0) save('resume', docHash(docSource) + ':' + curIdx); };
+  function savedIndex(text) {
+    const v = saved('resume');
+    if (!v) return 0;
+    const [h, i] = v.split(':');
+    return h === docHash(text) ? Math.max(0, parseInt(i, 10) || 0) : 0;
+  }
+
+  // --- tidy: fix PDF paste artifacts -----------------------------------------
+  let preTidy = null;
+  const looksMessy = t =>
+    (t.match(/[a-z]- [a-z]/g) || []).length >= 2 ||
+    (t.match(/\[\d[\d,\s–-]*\]/g) || []).length >= 3 ||
+    (t.match(/[a-z,;] ?\n(?!\n)[a-z]/g) || []).length >= 5;
+  const tidyText = t => t
+    .replace(/([a-z])-[ \t]*\n[ \t]*([a-z])/g, '$1$2')                       // hyphen at wrapped line end
+    .replace(/([a-z])- (?!(?:or|and|nor|to|the)\b)([a-z])/g, '$1$2')         // "en- gines"
+    .replace(/\s*\[\d[\d,\s–-]*\]/g, '')                                // [10], [1, 2], [3-5]
+    .replace(/,\s*(?=[,.;:])/g, '')                                          // ",," left behind by removed citations
+    .replace(/((?:^|\n|\. )[IVXLC]+\.\s+)([A-Z]) ([A-Z]{3,})/g, '$1$2$3')    // "IV. M ETHODOLOGY"
+    .replace(/([^\n])\n(?!\n)/g, '$1 ')                                      // unwrap hard line breaks
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+  function updateTidy() {
+    const t = $('text').value;
+    const show = !reading() && (preTidy !== null || (t.length > 200 && looksMessy(t) && tidyText(t) !== t));
+    $('tidy').classList.toggle('show', show);
+    $('tidy').textContent = preTidy !== null ? 'Undo' : 'Tidy';
+  }
+  $('tidy').addEventListener('click', () => {
+    const ta = $('text');
+    if (preTidy !== null) {
+      ta.value = preTidy;
+      preTidy = null;
+    } else {
+      preTidy = ta.value;
+      ta.value = tidyText(ta.value);
+    }
+    save('text', ta.value);
+    updateTidy();
+    ta.focus();
+  });
+
+  // --- voices -------------------------------------------------------------
+  async function loadVoices() {
+    const { voices, default: def, engine, device } = await (await fetch('/api/voices')).json();
+    const sel = $('voice');
+    sel.innerHTML = '';
+    const groups = new Map();
+    for (const v of voices) {
+      if (!groups.has(v.group)) {
+        const g = document.createElement('optgroup');
+        g.label = v.group;
+        groups.set(v.group, g);
+        sel.appendChild(g);
+      }
+      const opt = document.createElement('option');
+      opt.value = v.id;
+      opt.textContent = v.label;
+      groups.get(v.group).appendChild(opt);
+    }
+    const prev = saved('voice');
+    sel.value = voices.some(v => v.id === prev) ? prev : def;
+    if (device === 'cuda') {
+      $('engine').textContent = engine.replace(/\s*·\s*cuda$/, '');
+      $('cuda').classList.add('on');
+    } else if (engine) {
+      $('engine').textContent = engine;
+    }
+  }
+  loadVoices().catch(() => { $('status').textContent = 'Could not reach the server.'; });
+  $('voice').addEventListener('change', () => { save('voice', $('voice').value); refreshAhead(); });
+
+  // --- speed ---------------------------------------------------------------
+  const speed = $('speedRange');
+  const showSpeed = () => {
+    const txt = Number(speed.value).toFixed(2) + '×';
+    $('speedval').textContent = txt;
+    speed.setAttribute('aria-valuetext', txt);
+    const pct = (speed.value - speed.min) / (speed.max - speed.min) * 100;
+    speed.style.setProperty('--range-bg', `linear-gradient(to right, var(--text) ${pct}%, rgba(255,255,255,.12) ${pct}%)`);
+  };
+  speed.value = saved('speed') || '1';
+  speed.addEventListener('input', () => { showSpeed(); save('speed', speed.value); });
+  speed.addEventListener('change', refreshAhead);
+  showSpeed();
+
+  // --- document / sentences -------------------------------------------------
+  let sentences = [];   // {text, el, words, wordEls, buffer, duration, speed, voice, fetching, failed}
+  let docSource = '';
+  let curIdx = -1, playSession = 0;
+  let curNode = null, curOffset = 0, curStartAt = 0;
+  let paused = false, activeSentEl = null, lastWordEl = null, lastWordIdx = -1;
+  let userScrollUntil = 0;
+
+  const reading = () => $('player').classList.contains('reading');
+
+  function enterRead() {
+    $('player').classList.add('reading');
+    $('tidy').classList.remove('show');
+    $('toggle').focus();
+  }
+
+  function enterEdit() {
+    const at = curIdx >= 0 ? sentences[curIdx]?.charStart ?? null : null;
+    stopAll();
+    $('player').classList.remove('reading');
+    $('progressFill').style.width = '0';
+    $('time').textContent = '';
+    const ta = $('text');
+    ta.focus();
+    if (at != null) {  // drop the caret at the last-read sentence
+      ta.setSelectionRange(at, at);
+      ta.scrollTop = Math.max(0, ta.scrollHeight * (at / Math.max(1, ta.value.length)) - ta.clientHeight / 2);
+    }
+    updateTidy();
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+  }
+
+  function pushSentence(reader, raw, prevEnd, absStart) {
+    const trimmed = raw.trim();
+    if (!trimmed) return prevEnd;
+    const lead = raw.indexOf(trimmed);
+    const start = absStart + lead;
+    if (start > prevEnd) reader.appendChild(document.createTextNode(docSource.slice(prevEnd, start)));
+    const el = document.createElement('span');
+    el.className = 'sent';
+    el.textContent = trimmed;
+    el.dataset.i = sentences.length;
+    reader.appendChild(el);
+    sentences.push({ text: trimmed, el, charStart: start, words: null, wordEls: null, buffer: null,
+                     duration: 0, speed: null, voice: null, fetching: null, failed: false });
+    return start + trimmed.length;
+  }
+
+  // Single floating highlight rectangle, re-attached on every doc rebuild.
+  const hlEl = document.createElement('div');
+  hlEl.id = 'hl';
+  hlEl.setAttribute('aria-hidden', 'true');
+  let lastHlY = null;
+
+  function moveHl(el) {
+    if (!el) {
+      hlEl.style.opacity = '0';
+      lastHlY = null;
+      return;
+    }
+    const y = el.offsetTop;
+    const snap = lastHlY === null || Math.abs(y - lastHlY) > 80;
+    if (snap) hlEl.classList.add('snap');
+    hlEl.style.transform = `translate(${el.offsetLeft - 3}px, ${y - 2}px)`;
+    hlEl.style.width = el.offsetWidth + 6 + 'px';
+    hlEl.style.height = el.offsetHeight + 4 + 'px';
+    hlEl.style.opacity = '1';
+    if (snap) requestAnimationFrame(() => hlEl.classList.remove('snap'));
+    lastHlY = y;
+  }
+  addEventListener('resize', () => { if (lastWordEl) moveHl(lastWordEl); });
+
+  function buildDoc(text) {
+    stopAll();
+    sentences = [];
+    docSource = text;
+    const reader = $('reader');
+    reader.textContent = '';
+    reader.appendChild(hlEl);
+    moveHl(null);
+    let prevEnd = 0;
+    for (const { segment, index } of new Intl.Segmenter('en', { granularity: 'sentence' }).segment(text)) {
+      // hard-split pathological run-on "sentences" so the server accepts them
+      if (segment.trim().length <= 4000) {
+        prevEnd = pushSentence(reader, segment, prevEnd, index);
+      } else {
+        let i = 0;
+        while (i < segment.length) {
+          let j = Math.min(i + 4000, segment.length);
+          if (j < segment.length) {
+            const sp = segment.lastIndexOf(' ', j);
+            if (sp > i + 200) j = sp;
+          }
+          prevEnd = pushSentence(reader, segment.slice(i, j), prevEnd, index + i);
+          i = j;
+        }
+      }
+    }
+    if (prevEnd < text.length) reader.appendChild(document.createTextNode(text.slice(prevEnd)));
+    reader.scrollTop = 0;
+    return sentences.length > 0;
+  }
+
+  function wrapWords(s) {
+    if (!s.words?.length || s.wordEls) return;
+    const frag = document.createDocumentFragment();
+    let cur = 0;
+    s.wordEls = [];
+    for (const w of s.words) {
+      if (w.cs > cur) frag.appendChild(document.createTextNode(s.text.slice(cur, w.cs)));
+      const el = document.createElement('span');
+      el.className = 'w';
+      el.textContent = s.text.slice(w.cs, w.ce);
+      el.dataset.j = s.wordEls.length;
+      frag.appendChild(el);
+      s.wordEls.push(el);
+      cur = w.ce;
+    }
+    if (cur < s.text.length) frag.appendChild(document.createTextNode(s.text.slice(cur)));
+    s.el.textContent = '';
+    s.el.appendChild(frag);
+  }
+
+  // --- fetching --------------------------------------------------------------
+  function fetchSentence(i) {
+    const s = sentences[i];
+    if (!s || s.failed) return null;
+    const voice = $('voice').value, spd = Number(speed.value);
+    if (s.buffer && s.speed === spd && s.voice === voice) return null;      // fresh
+    if (s.fetching && s.fetchSpeed === spd && s.fetchVoice === voice) return s.fetching;
+    s.fetchSpeed = spd;
+    s.fetchVoice = voice;
+    s.fetching = (async () => {
+      const res = await fetch('/api/sentence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: s.text, voice, speed: spd }),
+      });
+      if (res.status === 400) { s.failed = true; s.fetching = null; return; } // unspeakable — skip
+      if (!res.ok) {
+        s.fetching = null;
+        let msg = 'Generation failed.';
+        try { const d = (await res.json()).detail; msg = (Array.isArray(d) ? d[0]?.msg : d) || msg; } catch {}
+        throw new Error(msg);
+      }
+      const { audio, duration, words } = await res.json();
+      if (s.fetchSpeed !== spd || s.fetchVoice !== voice) { s.fetching = null; return; } // superseded
+      const bytes = Uint8Array.from(atob(audio), c => c.charCodeAt(0));
+      const buffer = await audioCtx.decodeAudioData(bytes.buffer);
+      s.buffer = buffer;
+      s.duration = duration;
+      s.words = words;
+      s.wordEls = null;
+      s.speed = spd;
+      s.voice = voice;
+      s.fetching = null;
+      wrapWords(s);
+    })();
+    return s.fetching;
+  }
+  const prefetch = i => { if (i < sentences.length) fetchSentence(i)?.catch(() => {}); };
+  function refreshAhead() { if (curNode) { prefetch(curIdx + 1); prefetch(curIdx + 2); } }
+
+  // --- playback engine ---------------------------------------------------------
+  let audioCtx = null, analyser = null, td = null;
+
+  function ensureAudio() {
+    if (audioCtx) {
+      if (audioCtx.state === 'suspended' && !paused) audioCtx.resume();
+      return;
+    }
+    audioCtx = new AudioContext();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    td = new Uint8Array(analyser.fftSize);
+    analyser.connect(audioCtx.destination);
+  }
+
+  function stopNode() {
+    if (curNode) {
+      curNode.onended = null;
+      try { curNode.stop(); } catch {}
+      curNode = null;
+    }
+  }
+
+  function markSentence(i) {
+    const prev = activeSentEl;
+    if (prev) {  // dim the just-read sentence smoothly, without animating hovers
+      prev.classList.remove('active');
+      prev.classList.add('fading');
+      clearTimeout(prev._fadeTimer);
+      prev._fadeTimer = setTimeout(() => prev.classList.remove('fading'), 950);
+    }
+    lastWordEl?.classList.remove('now');
+    lastWordEl = null;
+    lastWordIdx = -1;
+    moveHl(null);
+    activeSentEl = i >= 0 ? sentences[i]?.el : null;
+    activeSentEl?.classList.add('active');
+  }
+
+  function setPaused(p) {
+    paused = p;
+    if (audioCtx) p ? audioCtx.suspend() : audioCtx.resume();
+    setToggleIcon();
+  }
+
+  function setToggleIcon() {
+    const playing = curNode && !paused;
+    const t = $('toggle');
+    t.innerHTML = playing ? ICONS.pause : ICONS.play;
+    t.title = playing ? 'Pause' : (reading() ? 'Play' : 'Read');
+    t.setAttribute('aria-label', t.title);
+    if ('mediaSession' in navigator)
+      navigator.mediaSession.playbackState = curNode ? (paused ? 'paused' : 'playing') : 'none';
+  }
+
+  function stopAll() {
+    playSession++;
+    stopNode();
+    markSentence(-1);
+    curIdx = -1;
+    if (paused) setPaused(false);
+    setToggleIcon();
+  }
+
+  async function playFrom(i, offset = 0, wordIdx = null) {
+    if (!sentences.length) return;
+    ensureAudio();
+    if (i >= sentences.length) { save('resume', ''); enterEdit(); return; }  // finished — unlock edits
+    const session = ++playSession;
+    stopNode();
+    if (paused) setPaused(false);
+    curIdx = i;
+    saveResume();
+    markSentence(i);
+    autoScroll(sentences[i].el);
+    const s = sentences[i];
+    try {
+      const p = fetchSentence(i);
+      if (p) await p;
+    } catch (err) {
+      if (session === playSession) { $('status').textContent = err.message; stopAll(); }
+      return;
+    }
+    if (session !== playSession) return;
+    if (s.failed || !s.buffer) { playFrom(i + 1); return; }
+    if (wordIdx != null) offset = Math.max(0, (s.words?.[wordIdx]?.s ?? 0) - 0.02);
+    const node = audioCtx.createBufferSource();
+    node.buffer = s.buffer;
+    node.connect(analyser);
+    node.onended = () => { if (session === playSession) playFrom(i + 1); };
+    curNode = node;
+    curOffset = Math.max(0, Math.min(offset, Math.max(0, s.duration - 0.05)));
+    curStartAt = audioCtx.currentTime;
+    node.start(0, curOffset);
+    setToggleIcon();
+    prefetch(i + 1);
+    prefetch(i + 2);
+  }
+
+  function startReading() {
+    const text = $('text').value.trim();
+    if (!text) { $('status').textContent = 'Nothing to read.'; return; }
+    if (text.length > MAX_CHARS) {
+      $('status').textContent = `Text is ${text.length.toLocaleString()} characters — the limit is ${MAX_CHARS.toLocaleString()}.`;
+      return;
+    }
+    $('status').textContent = '';
+    ensureAudio();
+    if (!buildDoc(text)) { $('status').textContent = 'Nothing to read.'; return; }
+    if ('mediaSession' in navigator)
+      navigator.mediaSession.metadata = new MediaMetadata({ title: text.slice(0, 80), artist: 'Minimal TTS' });
+    enterRead();
+    playFrom(Math.min(savedIndex(text), sentences.length - 1));  // resume where you left off
+  }
+
+  $('toggle').addEventListener('click', () => {
+    if (curNode) setPaused(!paused);
+    else if (reading() && sentences.length) playFrom(Math.min(savedIndex(docSource), sentences.length - 1));
+    else startReading();
+  });
+
+  if ('mediaSession' in navigator) {
+    const ms = navigator.mediaSession;
+    ms.setActionHandler('play', () => { if (curNode && paused) setPaused(false); else if (!curNode) startReading(); });
+    ms.setActionHandler('pause', () => { if (curNode && !paused) setPaused(true); });
+    ms.setActionHandler('stop', () => { if (reading()) enterEdit(); });
+    ms.setActionHandler('previoustrack', () => { if (curIdx >= 0) playFrom(Math.max(0, curIdx - 1)); });
+    ms.setActionHandler('nexttrack', () => { if (curIdx >= 0) playFrom(Math.min(sentences.length - 1, curIdx + 1)); });
+  }
+  $('stop').addEventListener('click', enterEdit);
+
+  $('reader').addEventListener('click', e => {
+    const sEl = e.target.closest('.sent');
+    if (!sEl) return;
+    const i = Number(sEl.dataset.i);
+    const w = e.target.closest('.w');
+    playFrom(i, 0, w ? Number(w.dataset.j) : null);
+  });
+  for (const evt of ['wheel', 'touchmove', 'pointerdown'])
+    $('reader').addEventListener(evt, () => { userScrollUntil = performance.now() + 4000; }, { passive: true });
+
+  function autoScroll(el) {
+    if (performance.now() < userScrollUntil) return;
+    const r = $('reader');
+    r.scrollTo({ top: el.offsetTop - r.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
+  }
+
+  // --- keyboard -----------------------------------------------------------------
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (!e.repeat) startReading();
+      return;
+    }
+    if (e.key === 'Escape' && reading()) { enterEdit(); return; }
+    if (['TEXTAREA', 'INPUT', 'SELECT'].includes(e.target.tagName)) return;
+    if (e.code === 'Space' && e.target.tagName !== 'BUTTON') {
+      e.preventDefault();
+      $('toggle').click();
+    } else if (e.key === 'ArrowRight' && curIdx >= 0) {
+      e.preventDefault();
+      playFrom(Math.min(curIdx + 1, sentences.length - 1));
+    } else if (e.key === 'ArrowLeft' && curIdx >= 0) {
+      e.preventDefault();
+      const t = curNode ? curOffset + (audioCtx.currentTime - curStartAt) : 0;
+      playFrom(t > 2 || curIdx === 0 ? curIdx : curIdx - 1);
+    }
+  });
+
+  // --- download (whole text in one WAV) -----------------------------------------
+  let dlBusy = false;
+  $('download').addEventListener('click', async e => {
+    const text = reading() ? docSource : $('text').value.trim();
+    if (!text || dlBusy) return;
+    const format = e.shiftKey ? 'wav' : 'opus';
+    dlBusy = true;
+    $('download').innerHTML = '<span class="spinner"></span>';
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice: $('voice').value, speed: Number(speed.value), format }),
+      });
+      if (!res.ok) throw new Error('Download failed.');
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'tts-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.' + format;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      $('status').textContent = err.message;
+    } finally {
+      dlBusy = false;
+      $('download').innerHTML = ICONS.down;
+    }
+  });
+
+  // --- glow / word highlight / progress loop ------------------------------------------
+  // The aurora drifts on its own (CSS); audio only sways its brightness, slowly.
+  let energy = 0;
+
+  const fmt = s => isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00';
+
+  function frame() {
+    // 1. slow, subtle brightness swell from live audio
+    let rms = 0;
+    if (analyser) {
+      analyser.getByteTimeDomainData(td);
+      let sum = 0;
+      for (let i = 0; i < td.length; i++) {
+        const v = (td[i] - 128) / 128;
+        sum += v * v;
+      }
+      rms = Math.sqrt(sum / td.length);
+    }
+    const playing = curNode && !paused;
+    const target = playing ? Math.min(1, rms * 6) : 0;
+    energy += (target - energy) * (target > energy ? 0.03 : 0.008);  // ~1s rise, ~5s fall
+    $('glow').style.opacity = (0.28 + 0.25 * energy).toFixed(3);
+    // 2. word highlight + progress
+    if (curNode && curIdx >= 0) {
+      const s = sentences[curIdx];
+      const t = curOffset + (audioCtx.currentTime - curStartAt);
+      if (s?.words?.length && s.wordEls) {
+        let j = lastWordIdx;
+        while (j + 1 < s.words.length && s.words[j + 1].s <= t) j++;
+        const el = j >= 0 ? s.wordEls[j] : null;
+        if (el !== lastWordEl) {
+          lastWordEl?.classList.remove('now');
+          el?.classList.add('now');
+          lastWordEl = el;
+          moveHl(el);
+        }
+        lastWordIdx = j;
+      }
+      updateProgress(t);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  function updateProgress(tCur) {
+    let known = 0, knownChars = 0;
+    for (const s of sentences) if (s.duration) { known += s.duration; knownChars += s.text.length; }
+    const rate = knownChars ? known / knownChars : 0.06 / Number(speed.value);
+    const est = s => s.duration || s.text.length * rate;
+    let elapsed = tCur, total = 0, allKnown = true;
+    for (let i = 0; i < sentences.length; i++) {
+      const d = est(sentences[i]);
+      if (!sentences[i].duration) allKnown = false;
+      total += d;
+      if (i < curIdx) elapsed += d;
+    }
+    $('progressFill').style.width = total ? `${Math.min(100, elapsed / total * 100)}%` : '0';
+    $('time').textContent = `${fmt(elapsed)} / ${allKnown ? '' : '≈'}${fmt(total)}`;
+  }
+
+  updateTidy();
+</script>
