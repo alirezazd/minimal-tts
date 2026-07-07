@@ -34,7 +34,7 @@
   header { display: flex; align-items: center; gap: 10px; user-select: none; }
   header h1 { font-size: 15px; font-weight: 600; letter-spacing: .01em; }
   header span#engine { font-size: 12.5px; color: var(--muted); }
-  #cuda {  /* neon badge, shown only when synthesis runs on CUDA */
+  #cuda {
     display: none;
     align-items: center;
     gap: 5px;
@@ -63,7 +63,6 @@
   button { font: inherit; border: none; cursor: pointer; background: none; color: var(--text); }
   :is(select, input[type="range"], button):focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
 
-  /* ---- the one window ---------------------------------------------------- */
   #player {
     position: relative;
     height: calc(100vh - 170px);
@@ -76,7 +75,7 @@
     transition: border-color .2s;
   }
   #player:focus-within { border-color: rgba(255, 255, 255, .18); }
-  #player::after {  /* specular rim — light catching the top edge of the pane */
+  #player::after {
     content: '';
     position: absolute;
     inset: 0;
@@ -92,7 +91,7 @@
     filter: blur(44px) saturate(1.5);
     opacity: .35;
   }
-  #glow::before {  /* base tint so the whole rectangle is always lit */
+  #glow::before {
     content: '';
     position: absolute;
     inset: 0;
@@ -100,7 +99,7 @@
       rgba(129,140,248,.14) 0%, rgba(160,136,250,.12) 25%, rgba(192,132,252,.11) 50%,
       rgba(124,160,250,.12) 75%, rgba(56,189,248,.14) 100%);
   }
-  /* eased multi-stop falloffs quantize far less than two-stop ramps */
+  /* multi-stop falloffs band far less than two-stop ramps */
   .blob { position: absolute; border-radius: 50%; will-change: transform; }
   .b1 {
     width: 70%; height: 85%; left: -10%; top: -15%;
@@ -149,7 +148,7 @@
     backdrop-filter: blur(26px) saturate(1.25);
     -webkit-backdrop-filter: blur(26px) saturate(1.25);
   }
-  #glass::before {  /* film grain dither — breaks up 8-bit gradient banding */
+  #glass::before {  /* film-grain dither, breaks up gradient banding */
     content: '';
     position: absolute;
     inset: 0;
@@ -184,8 +183,7 @@
     overscroll-behavior: contain;
     color: var(--reader);
     white-space: pre-wrap;
-    /* permanent compositing layer: keeps text rasterization identical during
-       and after transitions/smooth-scroll, so brightness never "pops" at rest */
+    /* stable compositing layer so text brightness doesn't pop after transitions */
     transform: translateZ(0);
   }
   #player.reading #text { display: none; }
@@ -220,7 +218,7 @@
     background: rgba(255, 255, 255, .06);
     color: var(--text);
   }
-  .sent.fading {  /* applied by JS only when a sentence finishes being read */
+  .sent.fading {  /* JS adds this only when a sentence finishes */
     transition: background .9s ease-out, color .9s ease-out;
   }
   .w {
@@ -234,7 +232,7 @@
     text-shadow: 0 0 10px rgba(129, 140, 248, .35);
     transition: color .06s, text-shadow .06s;
   }
-  #hl {  /* the one floating highlight rectangle — glides and resizes between words */
+  #hl {
     position: absolute;
     left: 0;
     top: 0;
@@ -253,7 +251,6 @@
   }
   #hl.snap { transition: opacity .22s ease-out; }
 
-  /* ---- bottom bar --------------------------------------------------------- */
   .player-row {
     position: relative;  /* paints above the grain layer */
     display: flex;
@@ -291,7 +288,7 @@
   }
   select:hover, select:focus { border-color: rgba(255, 255, 255, .22); }
   select { color-scheme: dark; }
-  select option, select optgroup {  /* the native popup doesn't inherit the glass styling */
+  select option, select optgroup {  /* native popup doesn't inherit the glass styling */
     background: #14161a;
     color: var(--text);
   }
@@ -371,13 +368,11 @@
   $('stop').innerHTML = ICONS.stop;
   $('download').innerHTML = ICONS.down;
 
-  // --- persistence (never let storage failures kill the page) ------------
   const saved = key => { try { return localStorage.getItem('mtts:' + key); } catch { return null; } };
   const save = (key, val) => { try { localStorage.setItem('mtts:' + key, val); } catch {} };
   $('text').value = saved('text') || '';
   $('text').addEventListener('input', () => { save('text', $('text').value); preTidy = null; updateTidy(); });
 
-  // --- resume: remember the last-read sentence per exact text ---------------
   const docHash = str => {
     let h = 5381;
     for (let i = 0; i < str.length; i++) h = (h * 33 ^ str.charCodeAt(i)) >>> 0;
@@ -391,7 +386,6 @@
     return h === docHash(text) ? Math.max(0, parseInt(i, 10) || 0) : 0;
   }
 
-  // --- tidy: fix PDF paste artifacts -----------------------------------------
   let preTidy = null;
   const looksMessy = t =>
     (t.match(/[a-z]- [a-z]/g) || []).length >= 2 ||
@@ -426,7 +420,6 @@
     ta.focus();
   });
 
-  // --- voices -------------------------------------------------------------
   async function loadVoices() {
     const { voices, default: def, engine, device } = await (await fetch('/api/voices')).json();
     const sel = $('voice');
@@ -456,7 +449,6 @@
   loadVoices().catch(() => { $('status').textContent = 'Could not reach the server.'; });
   $('voice').addEventListener('change', () => { save('voice', $('voice').value); refreshAhead(); });
 
-  // --- speed ---------------------------------------------------------------
   const speed = $('speedRange');
   const showSpeed = () => {
     const txt = Number(speed.value).toFixed(2) + '×';
@@ -470,8 +462,7 @@
   speed.addEventListener('change', refreshAhead);
   showSpeed();
 
-  // --- document / sentences -------------------------------------------------
-  let sentences = [];   // {text, el, words, wordEls, buffer, duration, speed, voice, fetching, failed}
+  let sentences = [];
   let docSource = '';
   let curIdx = -1, playSession = 0;
   let curNode = null, curOffset = 0, curStartAt = 0;
@@ -494,7 +485,7 @@
     $('time').textContent = '';
     const ta = $('text');
     ta.focus();
-    if (at != null) {  // drop the caret at the last-read sentence
+    if (at != null) {
       ta.setSelectionRange(at, at);
       ta.scrollTop = Math.max(0, ta.scrollHeight * (at / Math.max(1, ta.value.length)) - ta.clientHeight / 2);
     }
@@ -593,7 +584,6 @@
     s.el.appendChild(frag);
   }
 
-  // --- fetching --------------------------------------------------------------
   function fetchSentence(i) {
     const s = sentences[i];
     if (!s || s.failed) return null;
@@ -633,7 +623,6 @@
   const prefetch = i => { if (i < sentences.length) fetchSentence(i)?.catch(() => {}); };
   function refreshAhead() { if (curNode) { prefetch(curIdx + 1); prefetch(curIdx + 2); } }
 
-  // --- playback engine ---------------------------------------------------------
   let audioCtx = null, analyser = null, td = null;
 
   function ensureAudio() {
@@ -745,7 +734,7 @@
     if ('mediaSession' in navigator)
       navigator.mediaSession.metadata = new MediaMetadata({ title: text.slice(0, 80), artist: 'Minimal TTS' });
     enterRead();
-    playFrom(Math.min(savedIndex(text), sentences.length - 1));  // resume where you left off
+    playFrom(Math.min(savedIndex(text), sentences.length - 1));
   }
 
   $('toggle').addEventListener('click', () => {
@@ -780,7 +769,6 @@
     r.scrollTo({ top: el.offsetTop - r.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
   }
 
-  // --- keyboard -----------------------------------------------------------------
   document.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
@@ -802,7 +790,6 @@
     }
   });
 
-  // --- download (whole text in one WAV) -----------------------------------------
   let dlBusy = false;
   $('download').addEventListener('click', async e => {
     const text = reading() ? docSource : $('text').value.trim();
@@ -831,14 +818,12 @@
     }
   });
 
-  // --- glow / word highlight / progress loop ------------------------------------------
-  // The aurora drifts on its own (CSS); audio only sways its brightness, slowly.
+  // the glow drifts on its own (CSS); audio only changes its brightness
   let energy = 0;
 
   const fmt = s => isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00';
 
   function frame() {
-    // 1. slow, subtle brightness swell from live audio
     let rms = 0;
     if (analyser) {
       analyser.getByteTimeDomainData(td);
@@ -853,7 +838,6 @@
     const target = playing ? Math.min(1, rms * 6) : 0;
     energy += (target - energy) * (target > energy ? 0.03 : 0.008);  // ~1s rise, ~5s fall
     $('glow').style.opacity = (0.28 + 0.25 * energy).toFixed(3);
-    // 2. word highlight + progress
     if (curNode && curIdx >= 0) {
       const s = sentences[curIdx];
       const t = curOffset + (audioCtx.currentTime - curStartAt);

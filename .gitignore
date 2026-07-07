@@ -12,3 +12,6 @@ wheels/
 # Model weights (downloaded on first run)
 models/
 
+# Chrome --app profile (created by the desktop launcher)
+.chrome-profile/
+

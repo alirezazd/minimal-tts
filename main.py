@@ -7,6 +7,9 @@ import base64
 import io
 import logging
 import os
+import platform
+import shutil
+import subprocess
 import threading
 import webbrowser
 from collections import OrderedDict
@@ -43,11 +46,10 @@ def _pick_device() -> str:
 DEVICE = os.environ.get("MINIMAL_TTS_DEVICE") or _pick_device()
 SAMPLE_RATE = 24_000
 ENGINE_NAME = "Kokoro-82M"
-GAIN = 1.5  # output loudness boost, clipped to [-1, 1]
+GAIN = 1.5
 MAX_CHARS = 20_000
 
-# All English Kokoro voices, best-rated first within each group.
-# The first letter of the id picks the language pipeline: a=US, b=UK.
+# The first letter of the id selects the language pipeline: a=US, b=UK.
 VOICE_GROUPS = {
     "US male": [
         "am_michael", "am_fenrir", "am_puck", "am_echo", "am_eric",
@@ -60,8 +62,7 @@ VOICE_GROUPS = {
     ],
     "UK female": ["bf_emma", "bf_isabella", "bf_alice", "bf_lily"],
 }
-# Custom voices: weighted blends of preset voice tensors. Tweak the weights
-# to taste — more am_onyx = deeper.
+# Weighted blends of preset voice tensors — more am_onyx = deeper.
 CUSTOM_VOICES = {
     "chad": {"label": "Chad", "group": "Custom",
              "recipe": [("am_puck", 0.4), ("am_onyx", 0.6)]},
@@ -81,7 +82,6 @@ _blends: dict = {}
 
 
 def _get_pipeline(lang_code: str):
-    """Lazily build one KModel and share it across per-language pipelines."""
     global _model
     from kokoro import KModel, KPipeline
 
@@ -96,7 +96,6 @@ def _get_pipeline(lang_code: str):
 
 
 def _resolve_voice(voice: str):
-    """Map a voice id to (lang_code, name-or-blended-tensor)."""
     if voice in CUSTOM_VOICES:
         recipe = CUSTOM_VOICES[voice]["recipe"]
         lang = recipe[0][0][0]
@@ -108,7 +107,6 @@ def _resolve_voice(voice: str):
 
 
 def _generate(text: str, voice: str, speed: float, with_words: bool = False):
-    """Synthesize text; optionally collect word timings mapped to char offsets."""
     lang, resolved = _resolve_voice(voice)
     pipeline = _get_pipeline(lang)
     chunks, words = [], []
@@ -153,7 +151,6 @@ def _wav_bytes(audio: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-# LRU cache of synthesized sentences: (text, voice, speed) -> response payload.
 _CACHE_MAX = 256
 _cache: OrderedDict = OrderedDict()
 _cache_lock = threading.Lock()
@@ -183,7 +180,7 @@ def _warmup() -> None:
     except Exception:
         log.exception("Warmup failed — first request will retry.")
         return
-    # Prefetch every voice so later switches work instantly (and offline).
+    # Prefetch every voice so switches are instant and work offline.
     ok = 0
     for vid in VOICES:
         try:
@@ -208,7 +205,7 @@ class SpeakRequest(BaseModel):
 
 @app.get("/")
 def index():
-    # no-cache = revalidate on each load, so UI updates land on plain refresh
+    # revalidate each load so UI changes show on a plain refresh
     return FileResponse(PROJECT_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
@@ -273,7 +270,6 @@ class SentenceRequest(BaseModel):
 
 @app.post("/api/sentence")
 def sentence(req: SentenceRequest):
-    """One sentence -> base64 WAV + word timings. Cached for instant replays."""
     text = _validated(req)
     key = (text, req.voice, round(req.speed, 2))
     hit = _cache_get(key)
@@ -289,11 +285,57 @@ def sentence(req: SentenceRequest):
     return payload
 
 
+# A chromeless Chrome "--app" window feels like a native app; fall back to a browser tab.
+_CHROME_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+                 "brave-browser", "microsoft-edge")
+
+
+def _find_chrome():
+    for name in _CHROME_NAMES:
+        path = shutil.which(name)
+        if path:
+            return path
+    candidates = []
+    if platform.system() == "Windows":
+        for env in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+            base = os.environ.get(env)
+            if base:
+                candidates += [
+                    Path(base) / "Google/Chrome/Application/chrome.exe",
+                    Path(base) / "Microsoft/Edge/Application/msedge.exe",
+                    Path(base) / "BraveSoftware/Brave-Browser/Application/brave.exe",
+                ]
+    elif platform.system() == "Darwin":
+        candidates += [
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            Path("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+        ]
+    return next((str(c) for c in candidates if c.exists()), None)
+
+
+def _open_window(url: str) -> None:
+    chrome = _find_chrome()
+    if not chrome:
+        webbrowser.open(url)
+        return
+    try:
+        subprocess.Popen(
+            [chrome, f"--app={url}", f"--user-data-dir={PROJECT_DIR / '.chrome-profile'}",
+             "--class=minimal-tts", "--no-first-run", "--no-default-browser-check",
+             "--password-store=basic"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        webbrowser.open(url)
+
+
 def main() -> None:
     threading.Thread(target=_warmup, daemon=True).start()
     log.info("Serving on http://%s:%d", HOST, PORT)
     if not os.environ.get("MINIMAL_TTS_NO_BROWSER"):
-        timer = threading.Timer(1.5, webbrowser.open, args=(f"http://{HOST}:{PORT}",))
+        timer = threading.Timer(1.5, _open_window, args=(f"http://{HOST}:{PORT}",))
         timer.daemon = True
         timer.start()
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
