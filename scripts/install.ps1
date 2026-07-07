@@ -1,11 +1,16 @@
-# Install Minimal TTS as a Windows app: Start Menu + Desktop shortcuts that open the app window.
+# Install Minimal TTS as a Windows app: Start Menu + Desktop shortcuts that start the
+# server, open the app window, and shut the server down when you close it.
 $ErrorActionPreference = "Stop"
 
-$here   = Split-Path -Parent $PSScriptRoot
-$launch = Join-Path $here "scripts\launch.ps1"
+$here = Split-Path -Parent $PSScriptRoot
+$uv   = (Get-Command uv -ErrorAction SilentlyContinue).Source
+if (-not $uv) { throw "uv not found on PATH — install it first: https://docs.astral.sh/uv/" }
 
 # Sync deps up front so the first launch is fast and offline.
-Push-Location $here; uv sync --frozen; Pop-Location
+Push-Location $here; & $uv sync --frozen; Pop-Location
+
+# Run hidden (no console window) via powershell; uv opens the app window and owns its life.
+$args = "-NoProfile -WindowStyle Hidden -Command `"& '$uv' run --directory '$here' main.py`""
 
 $shell = New-Object -ComObject WScript.Shell
 $links = @(
@@ -14,9 +19,8 @@ $links = @(
 )
 foreach ($lnk in $links) {
   $s = $shell.CreateShortcut($lnk)
-  # Run launch.ps1 with no visible console window.
   $s.TargetPath       = "powershell.exe"
-  $s.Arguments        = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launch`""
+  $s.Arguments        = $args
   $s.WorkingDirectory = $here
   $s.Description      = "Local read-aloud"
   # For a custom icon, drop a .ico in scripts\ and set: $s.IconLocation = "$here\scripts\minimal-tts.ico"

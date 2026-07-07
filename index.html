@@ -358,6 +358,14 @@
 <script>
   const $ = id => document.getElementById(id);
   const MAX_CHARS = 20000;
+
+  // Heartbeat: the server shuts itself down once every window has stopped pinging.
+  const _cid = Math.random().toString(36).slice(2);
+  const _ping = () => fetch('/api/ping?id=' + _cid, { method: 'POST' }).catch(() => {});
+  _ping();
+  setInterval(_ping, 15000);
+  addEventListener('pagehide', () => navigator.sendBeacon('/api/bye?id=' + _cid));
+
   const ICONS = {
     play:  '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M4.5 2.5a1 1 0 0 1 1.53-.85l8 5.5a1 1 0 0 1 0 1.7l-8 5.5A1 1 0 0 1 4.5 13.5z"/></svg>',
     pause: '<svg width="15" height="15" viewBox="0 0 16 16"><rect x="3.5" y="2.5" width="3.4" height="11" rx="1.2"/><rect x="9.1" y="2.5" width="3.4" height="11" rx="1.2"/></svg>',

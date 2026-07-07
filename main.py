@@ -11,6 +11,8 @@ import platform
 import shutil
 import subprocess
 import threading
+import time
+import urllib.request
 import webbrowser
 from collections import OrderedDict
 from pathlib import Path
@@ -79,6 +81,14 @@ _lock = threading.Lock()
 _model = None
 _pipelines: dict = {}
 _blends: dict = {}
+
+# App mode tracks open windows by heartbeat so it can quit once the last closes.
+_clients: dict = {}
+_clients_lock = threading.Lock()
+_ever_connected = False
+CLIENT_STALE = 100.0   # forget a window we haven't heard from in this long (crash backstop)
+CLOSE_GRACE = 4.0      # wait after the last window leaves, so a reload doesn't kill us
+STARTUP_GRACE = 60.0   # give up if no window ever connects
 
 
 def _get_pipeline(lang_code: str):
@@ -222,6 +232,22 @@ def voices():
     }
 
 
+@app.post("/api/ping")
+def ping(id: str = ""):
+    global _ever_connected
+    with _clients_lock:
+        _clients[id] = time.monotonic()
+        _ever_connected = True
+    return Response(status_code=204)
+
+
+@app.post("/api/bye")
+def bye(id: str = ""):
+    with _clients_lock:
+        _clients.pop(id, None)
+    return Response(status_code=204)
+
+
 def _validated(req) -> str:
     text = req.text.strip()
     if not text:
@@ -285,7 +311,7 @@ def sentence(req: SentenceRequest):
     return payload
 
 
-# A chromeless Chrome "--app" window feels like a native app; fall back to a browser tab.
+# Chromeless Chrome "--app" window; fall back to a normal browser tab.
 _CHROME_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
                  "brave-browser", "microsoft-edge")
 
@@ -331,14 +357,48 @@ def _open_window(url: str) -> None:
         webbrowser.open(url)
 
 
+# Quit once the last window's heartbeat stops.
+def _idle_watchdog(server) -> None:
+    start = time.monotonic()
+    empty_since = None
+    while not server.should_exit:
+        time.sleep(2.0)
+        now = time.monotonic()
+        with _clients_lock:
+            for cid in [c for c, seen in _clients.items() if now - seen > CLIENT_STALE]:
+                del _clients[cid]
+            active, ever = bool(_clients), _ever_connected
+        empty_since = None if active else (empty_since or now)
+        if ever and not active and now - empty_since > CLOSE_GRACE:
+            break
+        if not ever and now - start > STARTUP_GRACE:
+            break
+    server.should_exit = True
+
+
+def _server_already_running(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(f"{url}/api/voices", timeout=0.5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def main() -> None:
+    url = f"http://{HOST}:{PORT}"
+    app_mode = not os.environ.get("MINIMAL_TTS_NO_BROWSER")
+    if app_mode and _server_already_running(url):
+        _open_window(url)   # another instance already owns the server; just add a window
+        return
     threading.Thread(target=_warmup, daemon=True).start()
-    log.info("Serving on http://%s:%d", HOST, PORT)
-    if not os.environ.get("MINIMAL_TTS_NO_BROWSER"):
-        timer = threading.Timer(1.5, _open_window, args=(f"http://{HOST}:{PORT}",))
+    server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT, log_level="warning"))
+    log.info("Serving on %s", url)
+    if app_mode:
+        timer = threading.Timer(1.5, _open_window, args=(url,))
         timer.daemon = True
         timer.start()
-    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
+        threading.Thread(target=_idle_watchdog, args=(server,), daemon=True).start()
+    server.run()
 
 
 if __name__ == "__main__":

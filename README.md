@@ -23,12 +23,18 @@ git clone https://github.com/alirezazd/minimal-tts && cd minimal-tts
 uv run main.py
 ```
 
-uv handles Python and every dependency. A chromeless window opens at
-`127.0.0.1:8765`; the first run downloads the model (~360 MB) into `./models/`,
-and after that it's fully offline. Runs on NVIDIA (CUDA), Apple Silicon (MPS), or CPU.
+uv handles Python and every dependency. A chromeless app window opens at
+`127.0.0.1:8765` — close it and the server stops with it. The first run downloads
+the model (~360 MB) into `./models/`; after that it's fully offline. Runs on
+NVIDIA (CUDA), Apple Silicon (MPS), or CPU.
 
-**Optional launcher icon** — `./scripts/install.sh` (Linux) or `pwsh scripts/install.ps1`
-(Windows). Reuses the Chrome you already have; no bundled browser.
+### Desktop app
+
+For a launcher icon instead of a terminal, run `./scripts/install.sh` (Linux) or
+`pwsh scripts/install.ps1` (Windows). It registers **Minimal TTS** in your app
+menu; clicking it starts the hidden server, opens the window, and shuts the server
+down again when you close it. Reuses the Chrome you already have — no bundled
+browser. Remove it with `./scripts/uninstall.sh`.
 
 ## Voices
 

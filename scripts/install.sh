@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Install Minimal TTS as a desktop app: launcher, icon, and an always-warm user service.
+# Install Minimal TTS as a desktop app: a launcher icon that starts the server,
+# opens the window, and tears the server down again when you close it.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UV="$(command -v uv || true)"
-: "${UV:?uv not found on PATH — install it first: https://docs.astral.sh/uv/}"
+[ -n "$UV" ] || {
+  echo "uv not found on PATH — install it first: https://docs.astral.sh/uv/" >&2
+  exit 1
+}
 
 APPS="$HOME/.local/share/applications"
-UNITS="$HOME/.config/systemd/user"
 ICONS="$HOME/.local/share/icons/hicolor/scalable/apps"
-mkdir -p "$APPS" "$UNITS" "$ICONS"
+mkdir -p "$APPS" "$ICONS"
 
-# Sync deps up front so the first service start is fast and offline.
+# Sync deps up front so the first launch is fast and offline.
 ( cd "$HERE" && "$UV" sync --frozen )
 
 cat > "$ICONS/minimal-tts.svg" <<'SVG'
@@ -42,28 +45,12 @@ cat > "$ICONS/minimal-tts.svg" <<'SVG'
 </svg>
 SVG
 
-cat > "$UNITS/minimal-tts.service" <<EOF
-[Unit]
-Description=Minimal TTS backend
-After=default.target
-
-[Service]
-Type=simple
-Environment=MINIMAL_TTS_NO_BROWSER=1
-WorkingDirectory=$HERE
-ExecStart=$UV run main.py
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-EOF
-
 cat > "$APPS/minimal-tts.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Minimal TTS
 Comment=Local read-aloud
-Exec=$HERE/scripts/launch.sh
+Exec=$UV run --directory $HERE main.py
 Icon=minimal-tts
 Terminal=false
 Categories=AudioVideo;Audio;Utility;
@@ -72,11 +59,7 @@ StartupNotify=true
 StartupWMClass=minimal-tts
 EOF
 
-chmod +x "$HERE/scripts/launch.sh"
-systemctl --user daemon-reload
-systemctl --user enable --now minimal-tts.service
 update-desktop-database "$APPS" &>/dev/null || true
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" &>/dev/null || true
 
 echo "Installed. Launch “Minimal TTS” from your app menu."
-echo "Prefer on-demand instead of always-on?  systemctl --user disable minimal-tts"
