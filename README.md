@@ -34,7 +34,8 @@ For a launcher icon instead of a terminal, run `./scripts/install.sh` (Linux) or
 `pwsh scripts/install.ps1` (Windows). It registers **Minimal TTS** in your app
 menu; clicking it starts the hidden server, opens the window, and shuts the server
 down again when you close it. Reuses the Chrome you already have — no bundled
-browser. Remove it with `./scripts/uninstall.sh`.
+browser. Remove it with `./scripts/uninstall.sh` (Linux) or `pwsh scripts/uninstall.ps1`
+(Windows).
 
 ## Voices
 
