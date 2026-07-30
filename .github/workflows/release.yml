@@ -11,9 +11,11 @@ permissions:
 
 jobs:
   appimage:
-    # 22.04 on purpose: the AppImage inherits the runner's glibc, and building
-    # on a newer one would refuse to start on older distros.
-    runs-on: ubuntu-22.04
+    # The prebuilt ONNX Runtime that `ort` downloads references __isoc23_*
+    # symbols, which only exist in glibc 2.38+. That sets the floor, not the
+    # runner: on 22.04 (glibc 2.35) the link fails outright, and no older
+    # runner can produce a more portable binary. 24.04 ships 2.39.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
