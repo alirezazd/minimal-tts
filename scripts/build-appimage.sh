@@ -7,10 +7,14 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(dirname "$here")" # native/
+root="$(dirname "$here")"
 cd "$root"
 
-OUT="${1:-$root/dist/Minimal_TTS-x86_64.AppImage}"
+# The version goes in the filename: the embedded update info matches
+# Minimal_TTS-*-x86_64.AppImage.zsync, so an unversioned name never matches
+# and auto-update silently finds nothing.
+VERSION="${VERSION:-dev}"
+OUT="${1:-$root/dist/Minimal_TTS-$VERSION-x86_64.AppImage}"
 mkdir -p "$(dirname "$OUT")"
 WORK="$(mktemp -d)"
 AD="$WORK/AppDir"
@@ -48,5 +52,10 @@ if [ ! -x "$TOOL" ]; then
 fi
 
 UPD="gh-releases-zsync|alirezazd|minimal-tts|latest|Minimal_TTS-*-x86_64.AppImage.zsync"
-VERSION="${VERSION:-dev}" ARCH=x86_64 "$TOOL" --appimage-extract-and-run -u "$UPD" "$AD" "$OUT"
+VERSION="$VERSION" ARCH=x86_64 "$TOOL" --appimage-extract-and-run -u "$UPD" "$AD" "$OUT"
+# appimagetool drops the .zsync in the CWD; keep it beside the AppImage
+zs="$(basename "$OUT").zsync"
+if [ -f "$zs" ]; then
+  mv -f "$zs" "$(dirname "$OUT")/"
+fi
 echo "built: $OUT"

@@ -20,12 +20,12 @@ model's own duration predictions, not estimates.
 
 ## Install (Linux)
 
-Download `Minimal_TTS-x86_64.AppImage` from
-[Releases](https://github.com/alirezazd/minimal-tts/releases), then:
+Grab the `.AppImage` from the
+[latest release](https://github.com/alirezazd/minimal-tts/releases/latest), then:
 
 ```sh
-chmod +x Minimal_TTS-x86_64.AppImage
-./Minimal_TTS-x86_64.AppImage
+chmod +x Minimal_TTS-*-x86_64.AppImage
+./Minimal_TTS-*-x86_64.AppImage
 ```
 
 Opening it with [Gear Lever](https://github.com/mijorus/gearlever) adds an
@@ -55,7 +55,7 @@ length costs time, not memory.
 sudo dnf install alsa-lib-devel espeak-ng   # build: ALSA headers; runtime: espeak-ng
 ./scripts/get-models.sh                     # model + voices (~350 MB)
 cargo run --release
-./scripts/build-appimage.sh                 # -> dist/Minimal_TTS-x86_64.AppImage
+./scripts/build-appimage.sh                 # -> dist/
 ```
 
 ## Configuration

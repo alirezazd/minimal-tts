@@ -1,0 +1,68 @@
+name: Release
+
+# Tag a commit and the AppImage builds and publishes itself:
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    # 22.04 on purpose: the AppImage inherits the runner's glibc, and building
+    # on a newer one would refuse to start on older distros.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and packaging deps
+        run: |
+          sudo apt-get update
+          # libasound2-dev: cpal headers · espeak-ng: vendored below · zsync: appimagetool needs zsyncmake for the update file
+          sudo apt-get install -y --no-install-recommends libasound2-dev espeak-ng zsync
+
+      - name: Cache cargo and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-
+
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: models-${{ hashFiles('scripts/get-models.sh') }}
+
+      - name: Fetch model and voices
+        run: ./scripts/get-models.sh
+
+      - name: Vendor espeak-ng
+        # The lib and its data travel inside the AppImage so it runs with no
+        # system espeak-ng installed.
+        run: |
+          mkdir -p vendor
+          cp "$(ldconfig -p | awk '/libespeak-ng\.so\.1/ {print $NF; exit}')" vendor/libespeak-ng.so
+          cp -r /usr/share/espeak-ng-data vendor/
+
+      - name: Build AppImage
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./scripts/build-appimage.sh
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The .zsync must ship alongside the AppImage — Gear Lever and
+          # AppImageUpdate resolve it from the release assets to self-update.
+          gh release create "${{ github.ref_name }}" \
+            dist/Minimal_TTS-*-x86_64.AppImage \
+            dist/Minimal_TTS-*-x86_64.AppImage.zsync \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
