@@ -4,8 +4,6 @@ A local read-aloud app. Paste text, press play, and follow along as each
 sentence and word lights up in sync with the speech. No cloud, no accounts, no
 telemetry — everything runs and stays on your machine.
 
-https://github.com/user-attachments/assets/1c05f1bd-9c2d-42d6-b651-c3cae174cfff
-
 Native **Rust** + [Slint](https://slint.dev) — no Python, no browser, no runtime
 dependencies. [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0)
 runs on ONNX Runtime with espeak-ng for G2P, and word timings come from the
