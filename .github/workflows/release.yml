@@ -20,10 +20,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install build and packaging deps
+        # The 24.04 runner image ships far fewer -dev packages than 22.04, so
+        # every *-sys crate's system library has to be named explicitly.
         run: |
           sudo apt-get update
-          # libasound2-dev: cpal headers · espeak-ng: vendored below · zsync: appimagetool needs zsyncmake for the update file
-          sudo apt-get install -y --no-install-recommends libasound2-dev espeak-ng zsync
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev \
+            libfontconfig1-dev \
+            libssl-dev \
+            espeak-ng \
+            zsync
+          # libasound2-dev     cpal
+          # libfontconfig1-dev slint -> fontique -> yeslogic-fontconfig-sys
+          # libssl-dev         ort-sys's build script fetches ONNX Runtime over TLS
+          # espeak-ng          vendored into the AppImage below
+          # zsync              appimagetool shells out to zsyncmake for the update file
 
       - name: Cache cargo and build artifacts
         uses: actions/cache@v4
