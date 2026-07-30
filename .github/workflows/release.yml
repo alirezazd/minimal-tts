@@ -44,11 +44,18 @@ jobs:
 
       - name: Vendor espeak-ng
         # The lib and its data travel inside the AppImage so it runs with no
-        # system espeak-ng installed.
+        # system espeak-ng installed. Locate both rather than hardcoding paths:
+        # Debian/Ubuntu keep the data under /usr/lib/<triplet>, Fedora under
+        # /usr/share.
         run: |
           mkdir -p vendor
-          cp "$(ldconfig -p | awk '/libespeak-ng\.so\.1/ {print $NF; exit}')" vendor/libespeak-ng.so
-          cp -r /usr/share/espeak-ng-data vendor/
+          lib=$(ldconfig -p | awk '/libespeak-ng\.so\.1/ {print $NF; exit}')
+          data=$(find /usr/lib /usr/share -maxdepth 3 -type d -name espeak-ng-data -print -quit)
+          test -n "$lib"  || { echo "libespeak-ng.so.1 not found" >&2; exit 1; }
+          test -n "$data" || { echo "espeak-ng-data not found" >&2; exit 1; }
+          echo "lib=$lib data=$data"
+          cp "$lib" vendor/libespeak-ng.so
+          cp -r "$data" vendor/
 
       - name: Build AppImage
         env:
