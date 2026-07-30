@@ -1,68 +1,111 @@
 # Minimal TTS
 
-A local read-aloud app. One window: paste text, press play, and follow along as
-each sentence and word lights up in sync with the speech. No cloud, no accounts,
-no telemetry — everything runs and stays on your machine.
+A local read-aloud app. Paste text, press play, and follow along as each
+sentence and word lights up in sync with the speech. No cloud, no accounts, no
+telemetry — everything runs and stays on your machine.
 
 https://github.com/user-attachments/assets/1c05f1bd-9c2d-42d6-b651-c3cae174cfff
 
-- **[Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)** — one of the top-rated
-  open TTS models (Apache-2.0), 24 kHz output
-- **Read-along** — the current sentence brightens and a highlight rectangle glides
+Native **Rust** + [Slint](https://slint.dev) — no Python, no browser, no runtime
+dependencies. [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0)
+runs on ONNX Runtime with espeak-ng for G2P, and word timings come from the
+model's own duration predictions, not estimates.
+
+- **Read-along** — the current sentence brightens and a highlight glides
   word-to-word, driven by the model's word timestamps
 - **Sentence-streamed** — audio is generated as you listen and cached per
   (sentence, voice, speed), so playback starts instantly and seeks are free
-- **28 voices + custom blends** — mix voice embeddings in one line of config
+- **28 voices plus your own blends**, and a CLI for scripting or batch export
+- **Offline** — the model ships with the app; nothing is ever downloaded
 
-## Setup
+## Install (Linux)
 
-Install [uv](https://docs.astral.sh/uv/), then:
+Download `Minimal_TTS-x86_64.AppImage` from
+[Releases](https://github.com/alirezazd/minimal-tts/releases), then:
 
 ```sh
-git clone https://github.com/alirezazd/minimal-tts && cd minimal-tts
-uv run main.py
+chmod +x Minimal_TTS-x86_64.AppImage
+./Minimal_TTS-x86_64.AppImage
 ```
 
-uv handles Python and every dependency. A chromeless app window opens at
-`127.0.0.1:8765` — close it and the server stops with it. The first run downloads
-the model (~360 MB) into `./models/`; after that it's fully offline. Runs on
-NVIDIA (CUDA), Apple Silicon (MPS), or CPU.
+Opening it with [Gear Lever](https://github.com/mijorus/gearlever) adds an
+app-menu entry and keeps it updated from GitHub releases.
 
-### Desktop app
+## CLI
 
-For a launcher icon instead of a terminal, run `./scripts/install.sh` (Linux) or
-`pwsh scripts/install.ps1` (Windows). It registers **Minimal TTS** in your app
-menu; clicking it starts the hidden server, opens the window, and shuts the server
-down again when you close it. Reuses the Chrome you already have — no bundled
-browser. Remove it with `./scripts/uninstall.sh` (Linux) or `pwsh scripts/uninstall.ps1`
-(Windows).
+Launched bare it opens the app; given a file, `-`, or a literal string it
+synthesizes. Piped input is picked up automatically. `--help` lists everything.
 
-## Voices
+```sh
+minimal-tts article.txt                               # read it aloud
+minimal-tts article.txt -o out.wav --voice bm_george --speed 1.2
+pdftotext paper.pdf - | minimal-tts -                 # anything that emits text
+xclip -o | minimal-tts -o - | ffmpeg -i - clip.opus   # stdout for other formats
+minimal-tts article.txt -o out.wav --tsv words.tsv    # word timings
+minimal-tts --list-voices
+```
 
-28 English voices; default is **Michael** (crisp US male). Voices are
-style-embedding tensors, so you can blend your own in one line — e.g. **Chad**,
-40% Puck + 60% Onyx:
+Only `.wav` is written directly — `-o -` streams it to stdout, so ffmpeg or sox
+covers every other format. Synthesis runs sentence by sentence, so document
+length costs time, not memory.
 
-```python
-CUSTOM_VOICES = {
-    "chad": {"label": "Chad", "group": "Custom",
-             "recipe": [("am_puck", 0.4), ("am_onyx", 0.6)]},
-}
+## Build from source
+
+```sh
+sudo dnf install alsa-lib-devel espeak-ng   # build: ALSA headers; runtime: espeak-ng
+./scripts/get-models.sh                     # model + voices (~350 MB)
+cargo run --release
+./scripts/build-appimage.sh                 # -> dist/Minimal_TTS-x86_64.AppImage
 ```
 
 ## Configuration
 
-Environment variables, all optional:
+| Variable | Effect |
+|---|---|
+| `MTTS_MODELS` | Model directory (overrides the bundled lookup) |
+| `MTTS_LOWPASS` | Low-pass cutoff in Hz (`0` disables) |
+| `MTTS_ESPEAK_LIB` / `MTTS_ESPEAK_DATA` | Explicit espeak-ng library / data paths |
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `MINIMAL_TTS_PORT` | `8765` | Server port |
-| `MINIMAL_TTS_HOST` | `127.0.0.1` | Set `0.0.0.0` to reach it from your LAN (no auth) |
-| `MINIMAL_TTS_DEVICE` | auto | Force `cuda`, `mps`, or `cpu` |
-| `MINIMAL_TTS_NO_BROWSER` | unset | Don't auto-open the window |
-| `HF_HOME` | `./models` | Where model weights live |
+- State (text, voice, speed, resume position) → `~/.config/minimal-tts/state.json`
+- Pronunciation overrides → `~/.config/minimal-tts/lexicon.tsv`
+- Audio exports → `~/Downloads`
+
+### Voices
+
+28 English voices, default **Michael** (crisp US male); `--list-voices` prints
+them alongside any blends you define. Voices are style-embedding tensors, so
+blends are one line in `src/synth.rs` — e.g. **Chad**, 40% Puck + 60% Onyx:
+
+```rust
+pub const CUSTOM_VOICES: &[(&str, &[(&str, f32)])] =
+    &[("chad", &[("am_puck", 0.4), ("am_onyx", 0.6)])];
+```
+
+### Pronunciation
+
+Names, acronyms and jargon that espeak mangles can be respelled once in
+`~/.config/minimal-tts/lexicon.tsv` — one `term<TAB>respelling` per line:
+
+```tsv
+kubectl	koob cuttle
+AWS	ay double you ess
+```
+
+Plain English, no phonetic alphabet. Matching is whole-word and
+case-insensitive, and only pronunciation changes — your text and the read-along
+highlighting are untouched.
+
+## Notes
+
+- **Pasting PDF text** cleans it up in place — joined hyphenation, unwrapped
+  line breaks, dropped citation markers — so what you see is what gets read.
+  Ctrl+Z reverts it, Ctrl+Y redoes it.
+- **Ctrl+F** finds text in both the editor and the read-along view.
+- Output is low-passed to drop model hiss — 8 kHz for male voices, 11 kHz for
+  female so sibilance survives.
 
 ## License
 
 MIT. Speech model [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
-(Apache-2.0), G2P by [misaki](https://github.com/hexgrad/misaki).
+(Apache-2.0), G2P by [espeak-ng](https://github.com/espeak-ng/espeak-ng)
+(GPL-3.0, loaded at runtime), bundled font Liberation Sans (SIL OFL).

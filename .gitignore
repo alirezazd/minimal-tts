@@ -1,17 +1,6 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-
-# Model weights (downloaded on first run)
+target/
 models/
-
-# Chrome --app profile (created by the desktop launcher)
-.chrome-profile/
-
+vendor/
+dist/
+*.AppImage
+*.AppImage.zsync

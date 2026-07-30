@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Minimal TTS
+Comment=Offline neural text-to-speech
+Exec=minimal-tts
+Icon=minimal-tts
+Terminal=false
+Categories=AudioVideo;Audio;Utility;
+Keywords=tts;speech;voice;kokoro;read;
+StartupWMClass=minimal-tts

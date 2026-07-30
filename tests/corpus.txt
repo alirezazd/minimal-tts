@@ -1,0 +1,14 @@
+The quick brown fox jumps over the lazy dog.
+The reader follows each word as it lights up, in near-perfect time with the spoken voice, a single soft rectangle gliding from one word to the next.
+Hello, world! How are you today?
+He said: "God is dead; and we have killed him."
+What doesn't kill me makes me stronger — or so they say…
+In 1882, Nietzsche published "The Gay Science" (his fourth book).
+The model runs at 4.5x realtime, using 311 MB of weights.
+Dr. Smith arrived at 9:30 a.m. on May 3rd, 2026.
+It's a well-known fact: co-operation beats isolation.
+Wait... what? That can't be right!
+The price is $42.50, marked down from $60.
+(Parentheses), [brackets], {braces}, and "quotes" — all of them.
+I have 2 apples, 3 oranges, and 100 grapes.
+naïve café résumé — non-ASCII text still works.

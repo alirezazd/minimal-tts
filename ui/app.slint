@@ -1,0 +1,741 @@
+import { ComboBox, Slider } from "std-widgets.slint";
+
+// minimal loading spinner: a bright head orbiting a faint ring
+component Spinner inherits Rectangle {
+    in property <float> angle; // degrees, driven from Rust
+    Rectangle {
+        width: 15px;
+        height: 15px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.width / 2;
+        border-width: 1.5px;
+        border-color: #ffffff26;
+    }
+    Rectangle {
+        width: 4.5px;
+        height: 4.5px;
+        border-radius: self.width / 2;
+        background: #dbe3ff;
+        x: parent.width / 2 - self.width / 2 + 6px * cos(root.angle * 1deg);
+        y: parent.height / 2 - self.height / 2 + 6px * sin(root.angle * 1deg);
+    }
+}
+
+// determinate circular progress: faint full track + an arc from 12 o'clock
+component ProgressRing inherits Rectangle {
+    in property <float> progress;             // 0..1
+    in property <color> ring-color: #818cf8;
+    Rectangle {
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: #ffffff26;
+        background: transparent;
+    }
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        stroke: root.ring-color;
+        stroke-width: 2px;
+        fill: transparent;
+        MoveTo { x: 50; y: 8; }
+        ArcTo {
+            radius-x: 42;
+            radius-y: 42;
+            x: 50 + 42 * sin(root.progress * 360 * 1deg);
+            y: 50 - 42 * cos(root.progress * 360 * 1deg);
+            large-arc: root.progress > 0.5;
+            sweep: true;
+        }
+    }
+}
+
+// progress ring that flips to a red ✕ on hover (cancel affordance). No TouchArea
+// of its own — the caller owns click handling and passes the hover source.
+component CancelableRing inherits Rectangle {
+    in property <float> progress;
+    in property <bool> hovered;
+    in property <length> x-size: 16px;
+    ProgressRing {
+        width: 100%;
+        height: 100%;
+        progress: root.progress;
+        visible: !root.hovered;
+    }
+    // hover: a filled red disc with a bold ✕ so "cancel" reads unmistakably
+    Rectangle {
+        visible: root.hovered;
+        width: 100%;
+        height: 100%;
+        border-radius: self.width / 2;
+        background: #ff5a5a2e;
+        border-width: 1.5px;
+        border-color: #ff6b6b;
+    }
+    Text {
+        text: "✕";
+        visible: root.hovered;
+        color: #ff8a8a;
+        font-size: root.x-size;
+        font-weight: 800;
+        width: 100%;
+        height: 100%;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export struct WordUi {
+    text: string,
+    x: length,
+    y: length,
+    w: length,
+    // background width: extends over the trailing space while the sentence
+    // continues on the same line, so the active-sentence tint reads as a band
+    wbg: length,
+    h: length,
+    sent: int,
+}
+
+// one reader-mode find highlight (a wash over a matched word's box)
+export struct SearchBox {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    current: bool,
+}
+
+export component MainWindow inherits Window {
+    title: "Minimal TTS";
+    preferred-width: 980px;
+    preferred-height: 760px;
+    min-width: 640px;
+    min-height: 480px;
+    background: #0a0b0d;
+    default-font-size: 15px;
+
+    // ---- state from Rust ----
+    in property <[WordUi]> words;
+    in property <int> current-word: -1;
+    in property <int> current-sent: -1;
+    in property <int> fade-sent: -1;
+    in property <float> fade-level: 0.0;   // 1 → just left, 0 → fully dimmed
+    in-out property <int> hover-sent: -1;
+    in property <bool> reading: false;
+    in property <bool> playing: false;
+    in property <bool> loading: false;    // synthesizing before playback can start
+    in property <bool> exporting: false;
+    in property <float> spin: 0.0;
+    in property <length> doc-height: 0px;
+    in property <float> energy: 0.0;       // voice energy 0..1
+    // blob centers (fractions of the pane) + scales, driven by Rust physics
+    in property <float> b1x; in property <float> b1y; in property <float> b1s: 1.0;
+    in property <float> b2x; in property <float> b2y; in property <float> b2s: 1.0;
+    in property <float> b3x; in property <float> b3y; in property <float> b3s: 1.0;
+    in property <float> b4x; in property <float> b4y; in property <float> b4s: 1.0;
+    in property <image> blob1;
+    in property <image> blob2;
+    in property <image> blob3;
+    in property <image> blob4;
+    in property <float> progress: 0.0;
+    in property <string> time-label: "";
+    in property <string> status: "";
+    in property <string> engine-label: "";
+    in property <float> export-progress: 0;    // 0..1 while exporting audio
+    in property <bool> tidy-banner: false;     // flash "auto-tidy applied" on paste
+    in-out property <bool> search-open: false; // Ctrl+F find bar
+    in property <string> search-count: "";     // "3/17" · "0" · ""
+    in property <[SearchBox]> search-boxes;    // reader-mode match highlights
+    in property <string> speed-label: "1.00×";
+    in property <[string]> voice-names;
+    in-out property <int> voice-index: 0;
+    in-out property <float> speed: 1.0;
+    in-out property <string> editor-text: "";
+    // highlight rectangle, driven per-frame from Rust
+    in property <length> hl-x: 0px;
+    in property <length> hl-y: 0px;
+    in property <length> hl-w: 0px;
+    in property <length> hl-h: 0px;
+    in property <float> hl-opacity: 0.0;
+    in-out property <length> reader-scroll: 0px;
+    in property <string> ui-font: "Liberation Sans";
+    default-font-family: root.ui-font;
+    out property <length> reader-width: content.width;
+    out property <length> reader-height: content.height;
+
+    callback start-reading();
+    callback stop-reading();
+    callback toggle-play();
+    callback word-clicked(int);
+    callback voice-changed(int);
+    callback speed-changed(float);
+    callback save-clicked();
+    callback cancel-export();
+    callback nav-sentence(int);
+    callback search-changed(string);
+    callback search-nav(int);       // +1 next · -1 previous
+    callback search-closed();
+    callback editor-edited();
+    callback redo-requested();
+
+    public function focus-editor() {
+        input.focus();
+    }
+    public function focus-keys() {
+        keys.focus();
+    }
+    // highlight the current editor-mode match (UTF-8 byte offsets)
+    public function select-editor-range(start: int, end: int) {
+        input.set-selection-offsets(start, end);
+    }
+    // auto-tidy replaces the buffer through TextInput's own edit path:
+    // select everything, then Rust dispatches the cleaned text as a key event
+    public function select-all-editor() {
+        input.select-all();
+    }
+    function open-search() {
+        root.search-open = true;
+        search-input.focus();
+        search-input.select-all();
+        // rehydrate hits for the current mode (query text survives close/reopen)
+        root.search-changed(search-input.text);
+    }
+    function close-search() {
+        root.search-open = false;
+        input.clear-selection();
+        root.search-closed();
+        if (root.reading) { keys.focus(); } else { input.focus(); }
+    }
+
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == "\n" && e.modifiers.control) {
+                root.start-reading();
+                return accept;
+            }
+            if (e.text == "f" && e.modifiers.control) {
+                root.open-search();
+                return accept;
+            }
+            if (e.text == Key.Escape && root.search-open) {
+                root.close-search();
+                return accept;
+            }
+            if (e.text == Key.Escape && root.reading) {
+                root.stop-reading();
+                return accept;
+            }
+            if (e.text == " " && root.reading) {
+                root.toggle-play();
+                return accept;
+            }
+            if (e.text == Key.RightArrow && root.reading) {
+                root.nav-sentence(1);
+                return accept;
+            }
+            if (e.text == Key.LeftArrow && root.reading) {
+                root.nav-sentence(-1);
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            padding: 24px;
+            padding-top: 18px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: "Minimal TTS";
+                    color: #e7e9ee;
+                    font-size: 15px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.engine-label;
+                    color: #7d838d;
+                    font-size: 12.5px;
+                    vertical-alignment: center;
+                }
+                Rectangle { }
+                Text {
+                    text: "Ctrl+Enter read · Esc edit · Space · ← → · Ctrl+F find";
+                    color: #7d838d;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+            }
+
+            player := Rectangle {
+                border-radius: 16px;
+                border-width: 1px;
+                border-color: #ffffff1f;
+                clip: true;
+                background: #0e101380;
+
+                // ---- aurora: ink-like color fields, physics driven from Rust ----
+                aurora := Rectangle {
+                    opacity: 0.30 + 0.28 * root.energy;
+                    // blobs are pre-rendered dithered textures (see make_blob):
+                    // falloff hits exact zero inside the image, so no rect-edge
+                    // lines, and source dithering kills gradient banding
+                    Image {
+                        source: root.blob1;
+                        image-fit: fill;
+                        width: parent.width * 0.86 * root.b1s;
+                        height: parent.height * 1.00 * root.b1s;
+                        x: parent.width * root.b1x - self.width / 2;
+                        y: parent.height * root.b1y - self.height / 2;
+                    }
+                    Image {
+                        source: root.blob2;
+                        image-fit: fill;
+                        width: parent.width * 0.80 * root.b2s;
+                        height: parent.height * 0.94 * root.b2s;
+                        x: parent.width * root.b2x - self.width / 2;
+                        y: parent.height * root.b2y - self.height / 2;
+                    }
+                    Image {
+                        source: root.blob3;
+                        image-fit: fill;
+                        width: parent.width * 0.88 * root.b3s;
+                        height: parent.height * 0.86 * root.b3s;
+                        x: parent.width * root.b3x - self.width / 2;
+                        y: parent.height * root.b3y - self.height / 2;
+                    }
+                    // small droplet that only really shows once the ink starts moving
+                    Image {
+                        source: root.blob4;
+                        image-fit: fill;
+                        width: parent.width * 0.48 * root.b4s;
+                        height: parent.height * 0.46 * root.b4s;
+                        x: parent.width * root.b4x - self.width / 2;
+                        y: parent.height * root.b4y - self.height / 2;
+                    }
+                }
+
+                glass := Rectangle {
+                    background: #191c2172;
+
+                    // apple-style glass: light falls from above + hairline inner rim
+                    Rectangle {
+                        y: 0;
+                        width: 100%;
+                        height: 110px;
+                        background: @linear-gradient(180deg, #ffffff0d 0%, #ffffff00 100%);
+                    }
+                    Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        border-radius: 16px;
+                        border-width: 1px;
+                        border-color: #ffffff10;
+                    }
+
+                    VerticalLayout {
+                        // editor and reader overlay in the same slot; `reading` picks one
+                        content := Rectangle {
+                            vertical-stretch: 1;
+
+                        editor-flick := Flickable {
+                            width: 100%;
+                            height: 100%;
+                            visible: !root.reading;
+                            // no drag-to-scroll: wheel scrolls, click-drag selects text
+                            interactive: false;
+                            viewport-height: max(self.height, input.preferred-height + 44px);
+                            input := TextInput {
+                                x: 24px;
+                                y: 22px;
+                                width: parent.width - 48px;
+                                text <=> root.editor-text;
+                                color: #e7e9ee;
+                                font-size: 16px;
+                                single-line: false;
+                                wrap: word-wrap;
+                                selection-background-color: #818cf866;
+                                selection-foreground-color: #ffffff;
+                                page-height: editor-flick.height;
+                                edited => { root.editor-edited(); }
+                                // Slint only maps Ctrl+Shift+Z to redo off Windows;
+                                // Rust replays Ctrl+Y as that combination
+                                key-pressed(e) => {
+                                    if (e.text == "y" && e.modifiers.control) {
+                                        root.redo-requested();
+                                        return accept;
+                                    }
+                                    reject
+                                }
+                                cursor-position-changed(cpos) => {
+                                    // keep the caret in view (30px line rhythm, 22px top inset)
+                                    if (cpos.y + 22px + editor-flick.viewport-y < 0px) {
+                                        editor-flick.viewport-y = min(0px, max(editor-flick.height - editor-flick.viewport-height, -cpos.y - 22px));
+                                    } else if (cpos.y + 22px + editor-flick.viewport-y > editor-flick.height - 30px) {
+                                        editor-flick.viewport-y = min(0px, max(editor-flick.height - editor-flick.viewport-height, editor-flick.height - cpos.y - 22px - 30px));
+                                    }
+                                }
+                            }
+                            Text {
+                                x: 24px;
+                                y: 22px;
+                                visible: root.editor-text == "" && !root.reading;
+                                text: "Type or paste text, then press Ctrl+Enter…";
+                                color: #7d838d;
+                                font-size: 16px;
+                            }
+                        }
+
+                        reader := Flickable {
+                            width: 100%;
+                            height: 100%;
+                            visible: root.reading;
+                            // no drag-to-scroll: wheel only, so word clicks land instantly
+                            interactive: false;
+                            viewport-height: max(self.height, root.doc-height);
+                            viewport-y <=> root.reader-scroll;
+
+                            hl := Rectangle {
+                                x: root.hl-x;
+                                y: root.hl-y;
+                                width: root.hl-w;
+                                height: root.hl-h;
+                                border-radius: 5px;
+                                background: #818cf833;
+                                drop-shadow-blur: 14px;
+                                drop-shadow-color: #818cf840;
+                                opacity: root.hl-opacity;
+                            }
+                            // Ctrl+F match highlights, behind the word text
+                            for b in root.search-boxes: Rectangle {
+                                x: b.x + 24px - 3px;
+                                y: b.y + 22px - 2px;
+                                width: b.w + 6px;
+                                height: b.h + 4px;
+                                border-radius: 5px;
+                                background: b.current ? #facc154d : #facc1526;
+                                border-width: b.current ? 1px : 0px;
+                                border-color: #facc15aa;
+                            }
+                            for w[i] in root.words: Rectangle {
+                                x: w.x + 24px - 3px;
+                                y: w.y + 22px - 2px;
+                                width: w.wbg + 6px;
+                                height: w.h + 4px;
+                                border-radius: 6px;
+                                background: w.sent == root.current-sent
+                                    ? #ffffff0f
+                                    : (w.sent == root.fade-sent
+                                        ? rgba(255, 255, 255, 0.06 * root.fade-level)
+                                        : transparent);
+                                wt := Text {
+                                    x: 3px;
+                                    y: 2px;
+                                    height: w.h;
+                                    vertical-alignment: center;
+                                    text: w.text;
+                                    font-size: 16px;
+                                    color: i == root.current-word
+                                        ? #dbe3ff
+                                        : (w.sent == root.current-sent
+                                            ? #e7e9ee
+                                            : (w.sent == root.fade-sent
+                                                ? #9aa1ac.mix(#e7e9ee, 1 - root.fade-level)
+                                                : (w.sent == root.hover-sent ? #cfd4db : #9aa1ac)));
+                                }
+                                ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    changed has-hover => {
+                                        if (self.has-hover) {
+                                            root.hover-sent = w.sent;
+                                        } else if (root.hover-sent == w.sent) {
+                                            root.hover-sent = -1;
+                                        }
+                                    }
+                                    clicked => { root.word-clicked(i); }
+                                }
+                            }
+                        }
+                        }
+
+                        // ---- bottom bar ----
+                        bar := Rectangle {
+                            height: 56px;
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                padding-top: 10px;
+                                padding-bottom: 12px;
+                                spacing: 12px;
+
+                                toggle-btn := Rectangle {
+                                    width: 34px;
+                                    height: 34px;
+                                    border-radius: 17px;
+                                    background: tb.has-hover ? #ffffff14 : transparent;
+                                    Path {
+                                        visible: !root.playing && !root.loading;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 15px;
+                                        height: 15px;
+                                        viewbox-width: 16;
+                                        viewbox-height: 16;
+                                        commands: "M4.5 2.5a1 1 0 0 1 1.53-.85l8 5.5a1 1 0 0 1 0 1.7l-8 5.5A1 1 0 0 1 4.5 13.5z";
+                                        fill: #e7e9ee;
+                                    }
+                                    Path {
+                                        visible: root.playing && !root.loading;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 15px;
+                                        height: 15px;
+                                        viewbox-width: 16;
+                                        viewbox-height: 16;
+                                        commands: "M3.5 2.5 h3.4 v11 h-3.4 z M9.1 2.5 h3.4 v11 h-3.4 z";
+                                        fill: #e7e9ee;
+                                    }
+                                    Spinner {
+                                        width: 100%;
+                                        height: 100%;
+                                        visible: root.loading;
+                                        angle: root.spin;
+                                    }
+                                    tb := TouchArea { clicked => { root.toggle-play(); } }
+                                }
+
+                                stop-btn := Rectangle {
+                                    visible: root.reading;
+                                    width: 34px;
+                                    height: 34px;
+                                    border-radius: 17px;
+                                    background: sb.has-hover ? #ffffff14 : transparent;
+                                    Path {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 15px;
+                                        height: 15px;
+                                        viewbox-width: 16;
+                                        viewbox-height: 16;
+                                        commands: "M3.6 3.6 h8.8 v8.8 h-8.8 z";
+                                        fill: #e7e9ee;
+                                    }
+                                    sb := TouchArea { clicked => { root.stop-reading(); } }
+                                }
+
+                                voice-box := ComboBox {
+                                    model: root.voice-names;
+                                    current-index <=> root.voice-index;
+                                    selected => { root.voice-changed(self.current-index); }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    speed-slider := Slider {
+                                        width: 90px;
+                                        minimum: 0.5;
+                                        maximum: 2.0;
+                                        value <=> root.speed;
+                                        changed(v) => { root.speed-changed(v); }
+                                    }
+                                    Text {
+                                        text: root.speed-label;
+                                        color: #7d838d;
+                                        font-size: 12.5px;
+                                        vertical-alignment: center;
+                                        min-width: 40px;
+                                    }
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    progress-track := Rectangle {
+                                        y: (parent.height - self.height) / 2;
+                                        height: 3px;
+                                        width: parent.width;
+                                        border-radius: 2px;
+                                        background: #ffffff17;
+                                        Rectangle {
+                                            x: 0;
+                                            width: parent.width * root.progress;
+                                            height: parent.height;
+                                            border-radius: 2px;
+                                            background: @linear-gradient(90deg, #818cf8 0%, #c084fc 50%, #38bdf8 100%);
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: root.time-label;
+                                    color: #7d838d;
+                                    font-size: 12.5px;
+                                    vertical-alignment: center;
+                                }
+
+                                save-btn := Rectangle {
+                                    width: 34px;
+                                    height: 34px;
+                                    border-radius: 17px;
+                                    background: dl.has-hover ? #ffffff14 : transparent;
+                                    Path {
+                                        visible: !root.exporting;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 15px;
+                                        height: 15px;
+                                        viewbox-width: 16;
+                                        viewbox-height: 16;
+                                        commands: "M8 1.5a.9.9 0 0 1 .9.9v6l2-2a.9.9 0 1 1 1.27 1.27l-3.53 3.54a.9.9 0 0 1-1.28 0L3.83 7.67A.9.9 0 1 1 5.1 6.4l2 2v-6A.9.9 0 0 1 8 1.5z M2.5 13.2h11a.9.9 0 1 1 0 1.8h-11a.9.9 0 1 1 0-1.8z";
+                                        fill: #e7e9ee;
+                                    }
+                                    // while exporting: progress ring, or ✕ to cancel on hover
+                                    if root.exporting : CancelableRing {
+                                        width: 20px;
+                                        height: 20px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        progress: root.export-progress;
+                                        hovered: dl.has-hover;
+                                    }
+                                    dl := TouchArea {
+                                        clicked => {
+                                            if root.exporting {
+                                                root.cancel-export();
+                                            } else {
+                                                root.save-clicked();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text {
+                height: 20px;
+                text: root.status;
+                color: #f28b82;
+                font-size: 13px;
+            }
+        }
+    }
+
+    // Ctrl+F find bar — floats over the top-right of the text pane
+    find-bar := Rectangle {
+        visible: root.search-open;
+        x: parent.width - self.width - 44px;
+        y: 56px;
+        width: 280px;
+        height: 38px;
+        border-radius: 19px;
+        background: #191c21f2;
+        border-width: 1px;
+        border-color: #ffffff1f;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000070;
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 8px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            spacing: 8px;
+            Rectangle {
+                horizontal-stretch: 1;
+                search-input := TextInput {
+                    width: 100%;
+                    height: 100%;
+                    single-line: true;
+                    vertical-alignment: center;
+                    color: #e7e9ee;
+                    font-size: 13.5px;
+                    selection-background-color: #818cf866;
+                    selection-foreground-color: #ffffff;
+                    edited => { root.search-changed(self.text); }
+                    key-pressed(e) => {
+                        // plain Enter cycles matches; Ctrl+Enter falls through to "read"
+                        if (e.text == "\n" && !e.modifiers.control) {
+                            root.search-nav(e.modifiers.shift ? -1 : 1);
+                            return accept;
+                        }
+                        if (e.text == Key.Escape) {
+                            root.close-search();
+                            return accept;
+                        }
+                        reject
+                    }
+                }
+                Text {
+                    visible: search-input.text == "";
+                    text: "Find…";
+                    color: #7d838d;
+                    font-size: 13.5px;
+                    vertical-alignment: center;
+                    height: 100%;
+                }
+            }
+            Text {
+                text: root.search-count;
+                color: #7d838d;
+                font-size: 12.5px;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                width: 22px;
+                border-radius: 11px;
+                background: close-ta.has-hover ? #ffffff14 : transparent;
+                Text {
+                    text: "✕";
+                    color: close-ta.has-hover ? #e7e9ee : #9aa1ac;
+                    font-size: 13px;
+                    width: 100%;
+                    height: 100%;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                close-ta := TouchArea { clicked => { root.close-search(); } }
+            }
+        }
+    }
+
+    // auto-tidy confirmation — slides down from the top edge, then fades out
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: root.tidy-banner ? 16px : -44px;
+        width: banner-row.preferred-width;
+        height: 32px;
+        border-radius: 16px;
+        background: #191c21f2;
+        border-width: 1px;
+        border-color: #818cf85c;
+        opacity: root.tidy-banner ? 1.0 : 0.0;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000070;
+        animate y, opacity { duration: 240ms; easing: ease-out; }
+        banner-row := HorizontalLayout {
+            alignment: center;
+            spacing: 7px;
+            padding-left: 14px;
+            padding-right: 16px;
+            Text {
+                text: "✨";
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: "Auto-tidy applied";
+                color: #e7e9ee;
+                font-size: 13px;
+                font-weight: 500;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
