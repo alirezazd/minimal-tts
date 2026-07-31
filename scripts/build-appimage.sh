@@ -35,10 +35,14 @@ cp assets/minimal-tts.svg "$AD/minimal-tts.svg"
 cp assets/minimal-tts.svg "$AD/usr/share/icons/hicolor/scalable/apps/minimal-tts.svg"
 cp assets/minimal-tts.desktop "$AD/minimal-tts.desktop"
 cp assets/minimal-tts.desktop "$AD/usr/share/applications/minimal-tts.desktop"
+# vendor/ holds espeak-ng's own auxiliary libraries as well as the library
+# itself; without it on the search path the dlopen fails and the app exits
+# before a window ever appears.
 cat > "$AD/AppRun" <<'EOF'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
 export APPDIR="$HERE"
+export LD_LIBRARY_PATH="$HERE/usr/bin/vendor${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$HERE/usr/bin/minimal-tts" "$@"
 EOF
 chmod +x "$AD/AppRun"

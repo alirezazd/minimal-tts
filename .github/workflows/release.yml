@@ -16,6 +16,15 @@ jobs:
     # runner: on 22.04 (glibc 2.35) the link fails outright, and no older
     # runner can produce a more portable binary. 24.04 ships 2.39.
     runs-on: ubuntu-24.04
+    env:
+      # Libraries every desktop Linux already has, so they must come from the
+      # host: AppRun puts vendor/ on the search path, and a bundled libstdc++
+      # older than the one the host's graphics stack expects crashes the app.
+      # Anything espeak-ng needs that is NOT on this list has to travel inside
+      # the AppImage — libsonic is the one that bit us, absent on Fedora.
+      # Matched with grep -E, not a case pattern: a variable holding "a|b"
+      # expands to one literal pattern in `case`, so nothing would be excluded.
+      HOST_LIBS: '^(libc|libm|libpthread|libdl|librt|libstdc\+\+|libgcc_s)\.so\.|^ld-linux'
     steps:
       - uses: actions/checkout@v4
 
@@ -69,11 +78,41 @@ jobs:
           echo "lib=$lib data=$data"
           cp "$lib" vendor/libespeak-ng.so
           cp -r "$data" vendor/
+          # espeak-ng has auxiliary libraries of its own — Ubuntu links libsonic
+          # and libpcaudio. A missing one makes the dlopen fail, so the app
+          # exits before showing a window. Take espeak-ng's *direct* NEEDED
+          # entries: the full ldd closure would pull libasound/libpulse in too,
+          # and those belong to the host.
+          for so in $(readelf -d "$lib" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p'); do
+            if echo "$so" | grep -qE "$HOST_LIBS"; then continue; fi
+            path=$(ldd "$lib" | awk -v s="$so" '$1 == s {print $3; exit}')
+            test -n "$path" || { echo "$so did not resolve" >&2; exit 1; }
+            cp -L "$path" "vendor/$so"
+            echo "vendored $so <- $path"
+          done
 
       - name: Build AppImage
         env:
           VERSION: ${{ github.ref_name }}
         run: ./scripts/build-appimage.sh
+
+      - name: Verify the bundle is self-contained
+        # The runner has espeak-ng's dependencies installed system-wide, so
+        # merely running the AppImage here proves nothing about other distros.
+        # Assert instead that every library espeak-ng needs is physically in the
+        # bundle — that is the check that would have caught shipping a build
+        # which died on any host without libsonic.
+        run: |
+          ./dist/Minimal_TTS-*-x86_64.AppImage --appimage-extract >/dev/null
+          v=squashfs-root/usr/bin/vendor
+          for so in $(readelf -d "$v/libespeak-ng.so" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p'); do
+            if echo "$so" | grep -qE "$HOST_LIBS"; then continue; fi
+            test -f "$v/$so" || { echo "not bundled: $so" >&2; exit 1; }
+            echo "bundled: $so"
+          done
+          printf 'Bundle check.' | ./squashfs-root/AppRun - -o /tmp/check.wav
+          test -s /tmp/check.wav
+          rm -rf squashfs-root
 
       - name: Publish release
         env:
