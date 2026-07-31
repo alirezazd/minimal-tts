@@ -27,8 +27,12 @@ pub(crate) const PASTE_JUMP: usize = 120;
 /// Should this edit arm auto-tidy? A big jump in length means a paste — except
 /// when the text is exactly what a tidy replaced, which is the user pressing
 /// Ctrl+Z. Re-tidying that would make the undo impossible.
+///
+/// The jump is measured in either direction. Only counting growth missed the
+/// most ordinary case there is: select-all and paste a document shorter than
+/// the one already loaded, which shrinks the buffer and so never tidied.
 pub(crate) fn arms_tidy(prev_len: usize, text: &str, tidy_source: Option<&str>) -> bool {
-    text.len() > prev_len + PASTE_JUMP && tidy_source != Some(text)
+    text.len().abs_diff(prev_len) > PASTE_JUMP && tidy_source != Some(text)
 }
 
 /// TextInput drops any insert holding a control char other than '\n'
@@ -100,6 +104,11 @@ mod tests {
         assert!(!arms_tidy(0, &pasted, Some(&pasted)), "undoing a tidy is not a paste");
         // ...but pasting it again afterwards should still work
         assert!(arms_tidy(0, &pasted, Some("something else")));
+        // replacing a loaded document with a shorter one is still a paste:
+        // hard-wrapped text pasted over a longer buffer used to keep every
+        // line break, and the reader paused at each one
+        assert!(arms_tidy(5000, &pasted, None), "a shorter paste arms it too");
+        assert!(!arms_tidy(500, &"x".repeat(450), None), "small trims do not");
     }
 
         #[test]

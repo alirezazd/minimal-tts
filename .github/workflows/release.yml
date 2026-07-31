@@ -78,11 +78,18 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           # The .zsync must ship alongside the AppImage — Gear Lever and
           # AppImageUpdate resolve it from the release assets to self-update.
-          gh release create "${{ github.ref_name }}" \
+          #
+          # Idempotent: `gh release create` errors if the release exists, which
+          # would make any re-run or moved tag fail at the very last step.
+          # Create it only when missing, then upload with --clobber so a rebuild
+          # replaces the assets instead of colliding with them.
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" \
             dist/Minimal_TTS-*-x86_64.AppImage \
             dist/Minimal_TTS-*-x86_64.AppImage.zsync \
-            --title "${{ github.ref_name }}" \
-            --generate-notes
+            --clobber
