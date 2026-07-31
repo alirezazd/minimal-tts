@@ -20,6 +20,24 @@ pub(crate) fn redo(ui: &MainWindow) {
     w.dispatch_event(WindowEvent::KeyReleased { text: Key::Shift.into() });
 }
 
+/// Replace the whole buffer through TextInput's own edit path, so the undo
+/// stack stays consistent — writing editor-text directly leaves stale offsets
+/// and panics on Ctrl+Z.
+pub(crate) fn replace_all(ui: &MainWindow, text: &str) {
+    use slint::platform::{Key, WindowEvent};
+    let w = ui.window();
+    // This runs a tick after the paste that triggered it, so the Control from
+    // Ctrl+V is still held — and TextInput ignores *every* text input while
+    // Control is down (i-slint-core items/text.rs:1057), which made the whole
+    // replacement a silent no-op and auto-tidy look dead. Release it first.
+    // A stray release cannot strand a modifier the way a stray press can, and
+    // the backend resyncs the real state on the next key event.
+    w.dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+    ui.invoke_focus_editor();
+    ui.invoke_select_all_editor();
+    w.dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+}
+
 /// A paste this much larger than the previous buffer is what arms auto-tidy;
 /// ordinary typing never trips it.
 pub(crate) const PASTE_JUMP: usize = 120;
@@ -77,9 +95,7 @@ impl super::App {
             return;
         };
         self.tidy_source = Some(raw);
-        ui.invoke_focus_editor();
-        ui.invoke_select_all_editor();
-        ui.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: cleaned.into() });
+        replace_all(ui, &cleaned);
         self.editor_len = ui.get_editor_text().len();
         ui.set_tidy_banner(true);
         self.banner_until = Some(Instant::now() + Duration::from_secs(3));
@@ -119,6 +135,43 @@ mod tests {
         assert_eq!(sanitize("a\r\nb"), "a\nb");
         assert_eq!(sanitize("a\u{0}\u{7}b"), "ab");
         assert_eq!(sanitize("héllo — ünïcode\n2nd line"), "héllo — ünïcode\n2nd line");
+    }
+
+    /// The real paste is Ctrl+V, and the tidy lands a tick later with Control
+    /// still held. TextInput drops every text input while Control is down, so
+    /// the replacement silently did nothing — auto-tidy looked completely dead
+    /// even though every other test passed, because they all dispatched with no
+    /// modifier held.
+
+        #[test]
+    fn tidy_applies_while_ctrl_is_still_held() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = MainWindow::new().unwrap();
+        let messy = "the rows are individual cycles and adjacent cycles are almost\n\
+                     identical, the ADC signal is smooth, and multi-cycle\n\
+                     instructions and stalls make the same feature row repeat\n\
+                     across consecutive cycles, so pooling them and splitting\n\
+                     at random would leak neighbours into the training set.";
+        ui.set_editor_text(messy.into());
+        let cleaned = sanitize(&crate::tidy::tidy(messy));
+        assert!(!cleaned.contains('\n'), "the wrapped lines join into one");
+
+        // exactly what the app sees mid-paste: Control down, never released
+        use slint::platform::{Key, WindowEvent};
+        ui.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Control.into() });
+
+        replace_all(&ui, &cleaned);
+        assert_eq!(
+            ui.get_editor_text().as_str(),
+            cleaned,
+            "auto-tidy must apply even with Ctrl still down from Ctrl+V"
+        );
+
+        // and the buffer must still be editable afterwards, not left in a
+        // state where the released modifier broke ordinary typing
+        ui.window().dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+        ui.window().dispatch_event(WindowEvent::KeyPressed { text: "!".into() });
+        assert!(ui.get_editor_text().contains('!'), "typing still works");
     }
 
     /// Auto-tidy rewrites the live buffer, which is only safe through
