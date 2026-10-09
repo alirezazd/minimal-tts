@@ -45,14 +45,20 @@ pub fn find_espeak_lib() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("MTTS_ESPEAK_LIB") {
         return Some(PathBuf::from(p));
     }
-    for name in ["libespeak-ng.so", "libespeak-ng.so.1"] {
+    // .so on Linux, .dll on Windows — espeak-ng's Windows build keeps the lib prefix
+    let unversioned = format!("libespeak-ng{}", std::env::consts::DLL_SUFFIX);
+    for name in [unversioned.as_str(), "libespeak-ng.so.1"] {
         for c in candidates(name) {
             if c.is_file() {
                 return Some(c);
             }
         }
     }
-    for sys in ["/usr/lib64/libespeak-ng.so.1", "/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1"] {
+    for sys in [
+        "/usr/lib64/libespeak-ng.so.1",
+        "/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1",
+        "C:/Program Files/eSpeak NG/libespeak-ng.dll",
+    ] {
         let p = PathBuf::from(sys);
         if p.is_file() {
             return Some(p);
@@ -70,8 +76,10 @@ pub fn find_espeak_data() -> Option<PathBuf> {
             return Some(c);
         }
     }
-    let sys = PathBuf::from("/usr/share/espeak-ng-data");
-    sys.is_dir().then_some(sys)
+    ["/usr/share/espeak-ng-data", "C:/Program Files/eSpeak NG/espeak-ng-data"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|p| p.is_dir())
 }
 
 impl Espeak {
@@ -80,8 +88,10 @@ impl Espeak {
         let data_path = find_espeak_data().context("no espeak-ng-data found (vendor/ or system)")?;
         let data_str = data_path.to_str().context("non-utf8 espeak data path")?;
         // espeak-ng has a small fixed internal buffer for this path; long
-        // install paths silently fall back to a baked-in build path.
-        if data_str.len() > 150 {
+        // install paths silently fall back to a baked-in build path. It is
+        // N_PATH_HOME: 160 bytes, but 230 in the Windows build.
+        let max = if cfg!(windows) { 220 } else { 150 };
+        if data_str.len() > max {
             bail!("espeak data path too long ({} chars): {data_str}", data_str.len());
         }
         let lib = Box::leak(Box::new(unsafe { libloading::Library::new(&lib_path) }

@@ -74,8 +74,63 @@ fn replace_all(d: &mut Vec<u8>, from: &[u8], to: &[u8]) {
     }
 }
 
+// UTF-8 code page: espeak-ng opens its data with narrow fopen, which would
+// otherwise mangle a non-ASCII install path (a user folder, say).
+#[cfg(windows)]
+const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>
+"#;
+
+// The .exe's own icon (Explorer, pinned taskbar) from the same SVG the window
+// and the Linux desktop entry use, plus the manifest above.
+#[cfg(windows)]
+fn windows_resources() {
+    use resvg::{tiny_skia, usvg};
+    let svg = std::fs::read("assets/minimal-tts.svg").expect("app icon");
+    let tree = usvg::Tree::from_data(&svg, &usvg::Options::default()).unwrap();
+    let mut icon = ico::IconDir::new(ico::ResourceType::Icon);
+    for px in [16, 20, 24, 32, 40, 48, 64, 256] {
+        let mut pm = tiny_skia::Pixmap::new(px, px).unwrap();
+        let s = px as f32 / tree.size().width();
+        resvg::render(&tree, tiny_skia::Transform::from_scale(s, s), &mut pm.as_mut());
+        // tiny-skia stores premultiplied alpha; ICO wants it straight
+        let rgba = pm
+            .pixels()
+            .iter()
+            .flat_map(|p| {
+                let c = p.demultiply();
+                [c.red(), c.green(), c.blue(), c.alpha()]
+            })
+            .collect();
+        let img = ico::IconImage::from_rgba_data(px, px, rgba);
+        icon.add_entry(ico::IconDirEntry::encode(&img).unwrap());
+    }
+    let ico_path = Path::new(&std::env::var("OUT_DIR").unwrap()).join("minimal-tts.ico");
+    icon.write(std::fs::File::create(&ico_path).unwrap()).unwrap();
+
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon(ico_path.to_str().unwrap());
+    res.set_manifest(MANIFEST);
+    res.compile().expect("embed Windows resources");
+    println!("cargo:rerun-if-changed=assets/minimal-tts.svg");
+}
+
 fn main() {
     patch_font();
+    #[cfg(windows)]
+    windows_resources();
     let config = slint_build::CompilerConfiguration::new().with_style("fluent-dark".into());
     slint_build::compile_with_config("ui/app.slint", config).unwrap();
 }

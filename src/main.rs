@@ -3,6 +3,11 @@
 //!   minimal-tts [FILE|-|"text"] [-o OUT.wav|-] [--voice V] [--speed S] …
 //!   cat article.txt | minimal-tts -o out.wav
 
+// No console window behind the app on Windows. The release also ships
+// minimal-tts-cli.exe: this same binary with the PE subsystem flipped back to
+// console, so terminals wait for it and see its output.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod app;
 mod audio;
 mod g2p;
@@ -145,9 +150,17 @@ fn stdin_has_data() -> bool {
             .map(|m| m.file_type().is_fifo() || m.file_type().is_file())
             .unwrap_or(false)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        !std::io::stdin().is_terminal()
+        use std::os::windows::io::AsRawHandle;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetFileType(h: *mut std::ffi::c_void) -> u32;
+        }
+        // FILE_TYPE_DISK | FILE_TYPE_PIPE. A console or NUL is FILE_TYPE_CHAR,
+        // and a GUI launch from Explorer has no stdin handle at all.
+        let h = std::io::stdin().as_raw_handle();
+        !h.is_null() && matches!(unsafe { GetFileType(h) }, 1 | 3)
     }
 }
 
@@ -161,7 +174,7 @@ fn resolve_input(arg: Option<&str>) -> Result<String> {
             if p.exists() {
                 return read_file(p);
             }
-            let looks_like_path = s.contains('/')
+            let looks_like_path = s.chars().any(std::path::is_separator)
                 || matches!(
                     p.extension().and_then(|e| e.to_str()),
                     Some("txt" | "md" | "text" | "log" | "csv" | "json")

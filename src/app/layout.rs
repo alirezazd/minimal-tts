@@ -17,17 +17,10 @@ pub(crate) const PAD_Y: f32 = 22.0;
 pub(crate) const APP_FONT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/MinimalTTSSans.ttf"));
 pub(crate) const APP_FONT_FAMILY: &str = "MinimalTTS Sans";
 
-/// Make the bundled font visible to fontconfig (skia resolves by family).
-pub(crate) fn install_app_font() {
-    let dir = crate::synth::xdg_dir("XDG_DATA_HOME", ".local/share").join("fonts");
-    let path = dir.join("MinimalTTSSans.ttf");
-    let stale = std::fs::read(&path).map_or(true, |cur| cur != APP_FONT);
-    if stale {
-        let _ = std::fs::create_dir_all(&dir);
-        if std::fs::write(&path, APP_FONT).is_ok() {
-            let _ = std::process::Command::new("fc-cache").arg(&dir).status();
-        }
-    }
+/// Make the bundled font resolvable by family name in a fontique collection —
+/// in memory, so nothing touches the user's font directories on any OS.
+pub(crate) fn register_app_font(collection: &mut parley::fontique::Collection) {
+    collection.register_fonts(parley::fontique::Blob::new(std::sync::Arc::new(APP_FONT)), None);
 }
 
 // ---------------------------------------------------------------- document
@@ -91,6 +84,7 @@ pub(crate) fn build_doc(raw: &str, logical_width: f32, scale: f32) -> Doc {
     }
 
     let mut fcx = parley::FontContext::new();
+    register_app_font(&mut fcx.collection);
     let mut lcx = parley::LayoutContext::<()>::new();
     let mut builder = lcx.ranged_builder(&mut fcx, raw, scale, false);
     // sharedparley pins line height to the font's own metrics ratio; for the

@@ -110,6 +110,7 @@ export struct SearchBox {
 
 export component MainWindow inherits Window {
     title: "Minimal TTS";
+    icon: @image-url("../assets/minimal-tts.svg");
     preferred-width: 980px;
     preferred-height: 760px;
     min-width: 640px;
@@ -365,9 +366,10 @@ export component MainWindow inherits Window {
                                 page-height: editor-flick.height;
                                 edited => { root.editor-edited(); }
                                 // Slint only maps Ctrl+Shift+Z to redo off Windows;
-                                // Rust replays Ctrl+Y as that combination
+                                // Rust replays Ctrl+Y as that combination. On
+                                // Windows Ctrl+Y already is redo — leave it be.
                                 key-pressed(e) => {
-                                    if (e.text == "y" && e.modifiers.control) {
+                                    if (Platform.os != OperatingSystemType.windows && e.text == "y" && e.modifiers.control) {
                                         root.redo-requested();
                                         return accept;
                                     }

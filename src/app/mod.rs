@@ -22,7 +22,7 @@ mod worker;
 
 use editor::{prepared_text, redo, sanitize};
 use export::Export;
-use layout::{build_doc, doc_first_word, install_app_font, make_blob, Doc, APP_FONT_FAMILY,
+use layout::{build_doc, doc_first_word, make_blob, register_app_font, Doc, APP_FONT_FAMILY,
              BLOB_STOPS, DROP_STOPS, PAD_X, PAD_Y};
 use worker::{spawn_worker, Key, Lru, Req, Resp, SentAudio};
 
@@ -92,6 +92,7 @@ struct App {
     export: Option<Export>,
     media: Option<souvlaki::MediaControls>,
     media_rx: Option<mpsc::Receiver<souvlaki::MediaControlEvent>>,
+    media_tried: bool,
     tick_n: u64,
 }
 
@@ -351,6 +352,7 @@ impl App {
         let dt = (now - self.last_tick).as_secs_f32().min(0.1);
         self.last_tick = now;
         self.tick_n += 1;
+        self.init_media(&ui);
 
         if self.pending_tidy {
             self.pending_tidy = false;
@@ -738,7 +740,6 @@ impl App {
 // ---------------------------------------------------------------- entry
 
 pub fn run() -> Result<()> {
-    install_app_font();
     // skia renders large text far better than the default femtovg
     let _ = slint::BackendSelector::new().renderer_name("skia".into()).select();
     // Wayland app_id / X11 WM_CLASS — without it GNOME's dash shows "Unknown".
@@ -749,6 +750,8 @@ pub fn run() -> Result<()> {
     let engine = Audio::new()?;
 
     let ui = MainWindow::new()?;
+    // the platform exists now; register before the font is first resolved
+    register_app_font(&mut slint::fontique_010::shared_collection());
     ui.set_engine_label("Kokoro-82M".into());
     ui.set_ui_font(APP_FONT_FAMILY.into());
     ui.set_blob1(make_blob((0x81, 0x8c, 0xf8), 0.66, &BLOB_STOPS));
@@ -802,27 +805,6 @@ pub fn run() -> Result<()> {
     let (tx_resp, rx_resp) = mpsc::channel::<Resp>();
     spawn_worker(synth, rx_req, tx_resp, worker_epoch.clone());
 
-    // OS media keys via MPRIS
-    let (media, media_rx) = {
-        let config = souvlaki::PlatformConfig {
-            dbus_name: "minimal_tts",
-            display_name: "Minimal TTS",
-            hwnd: None,
-        };
-        match souvlaki::MediaControls::new(config) {
-            Ok(mut controls) => {
-                let (mtx, mrx) = mpsc::channel();
-                match controls.attach(move |e| {
-                    let _ = mtx.send(e);
-                }) {
-                    Ok(()) => (Some(controls), Some(mrx)),
-                    Err(_) => (None, None),
-                }
-            }
-            Err(_) => (None, None),
-        }
-    };
-
     let app = Rc::new(RefCell::new(App {
         ui: ui.as_weak(),
         engine,
@@ -871,8 +853,9 @@ pub fn run() -> Result<()> {
         resume_hash,
         resume_idx,
         export: None,
-        media,
-        media_rx,
+        media: None, // attached by the first tick, once the window exists
+        media_rx: None,
+        media_tried: false,
         tick_n: 0,
     }));
 

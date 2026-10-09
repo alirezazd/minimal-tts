@@ -35,17 +35,11 @@ pub(crate) fn timestamp() -> String {
     let y = if m <= 2 { y + 1 } else { y };
     format!("{y:04}-{m:02}-{d:02}_{h:02}-{mi:02}-{s:02}")
 }
+/// XDG_DOWNLOAD_DIR on Linux, the Downloads known folder on Windows.
 pub(crate) fn downloads_dir() -> std::path::PathBuf {
-    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    if let Ok(dirs) = std::fs::read_to_string(home.join(".config/user-dirs.dirs")) {
-        for line in dirs.lines() {
-            if let Some(v) = line.strip_prefix("XDG_DOWNLOAD_DIR=") {
-                let p = v.trim_matches('"').replace("$HOME", &home.to_string_lossy());
-                return std::path::PathBuf::from(p);
-            }
-        }
-    }
-    home.join("Downloads")
+    dirs::download_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+        .unwrap_or_default()
 }
 
 impl super::App {

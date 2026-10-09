@@ -1,10 +1,12 @@
 name: Release
 
-# Tag a commit and the AppImage builds and publishes itself:
+# Tag a commit and the AppImage and the Windows installer + zip build and publish themselves:
 #   git tag v0.1.0 && git push origin v0.1.0
+# Run it by hand (Actions tab) to build both without publishing anything.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -93,7 +95,7 @@ jobs:
 
       - name: Build AppImage
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
         run: ./scripts/build-appimage.sh
 
       - name: Verify the bundle is self-contained
@@ -114,9 +116,118 @@ jobs:
           test -s /tmp/check.wav
           rm -rf squashfs-root
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: |
+            dist/Minimal_TTS-*-x86_64.AppImage
+            dist/Minimal_TTS-*-x86_64.AppImage.zsync
+          compression-level: 0
+          retention-days: 7
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-windows-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-windows-
+
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: models-windows-${{ hashFiles('scripts/get-models.sh') }}
+
+      - name: Fetch model and voices
+        shell: bash
+        run: ./scripts/get-models.sh
+
+      - name: Install Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Build installer and zip
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+        run: ./scripts/build-windows.ps1
+
+      - name: Verify both are self-contained
+        # The runner has the VC++ runtime installed system-wide, so assert what
+        # a clean machine needs is physically in the zip. Then synthesize from
+        # the extracted zip and from a silent install — with the checkout's own
+        # models/ and vendor/ moved aside, since the binary falls back to its
+        # source directory and would otherwise mask a broken bundle.
+        run: |
+          $need = 'minimal-tts.exe', 'minimal-tts-cli.exe', 'msvcp140.dll', 'msvcp140_1.dll',
+                  'vcruntime140.dll', 'vcruntime140_1.dll', 'vendor/libespeak-ng.dll',
+                  'vendor/espeak-ng-data/en_dict', 'models/kokoro.onnx', 'models/voices-v1.0.bin'
+          function Check($dir, $label) {
+            foreach ($f in $need) {
+              if (-not (Test-Path (Join-Path $dir $f))) { throw "${label}: not bundled: $f" }
+            }
+            $wav = Join-Path $env:RUNNER_TEMP "$label.wav"
+            & (Join-Path $dir minimal-tts-cli.exe) 'Bundle check.' -o $wav
+            if ($LASTEXITCODE) { throw "${label}: cli exited $LASTEXITCODE" }
+            if ((Get-Item $wav).Length -lt 1000) { throw "${label}: empty wav" }
+            "${label}: ok"
+          }
+          Rename-Item models models.off
+          Rename-Item vendor vendor.off
+          try {
+            $x = New-Item -ItemType Directory (Join-Path $env:RUNNER_TEMP zip)
+            tar.exe -x -f (Get-Item dist/Minimal_TTS-*-x86_64-windows.zip).FullName -C $x
+            Check (Get-ChildItem $x -Directory | Select-Object -First 1).FullName zip
+
+            $dir = Join-Path $env:RUNNER_TEMP installed
+            $setup = (Get-Item dist/Minimal_TTS-*-x86_64-windows-setup.exe).FullName
+            Start-Process $setup -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/CURRENTUSER', "/DIR=`"$dir`""
+            Check $dir installer
+            Start-Process (Join-Path $dir unins000.exe) -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES'
+            if (Test-Path (Join-Path $dir minimal-tts.exe)) { throw 'uninstall left the app behind' }
+            'uninstall: ok'
+          } finally {
+            Rename-Item models.off models
+            Rename-Item vendor.off vendor
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/Minimal_TTS-*-x86_64-windows-setup.exe
+            dist/Minimal_TTS-*-x86_64-windows.zip
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    # One job publishes both, so a release never ends up half-populated and
+    # two jobs never race to create it.
+    if: github.ref_type == 'tag'
+    needs: [appimage, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           # The .zsync must ship alongside the AppImage — Gear Lever and
@@ -131,4 +242,6 @@ jobs:
           gh release upload "$TAG" \
             dist/Minimal_TTS-*-x86_64.AppImage \
             dist/Minimal_TTS-*-x86_64.AppImage.zsync \
+            dist/Minimal_TTS-*-x86_64-windows-setup.exe \
+            dist/Minimal_TTS-*-x86_64-windows.zip \
             --clobber

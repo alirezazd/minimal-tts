@@ -29,6 +29,20 @@ chmod +x Minimal_TTS-*-x86_64.AppImage
 Opening it with [Gear Lever](https://github.com/mijorus/gearlever) adds an
 app-menu entry and keeps it updated from GitHub releases.
 
+## Install (Windows)
+
+Grab `-windows-setup.exe` from the
+[latest release](https://github.com/alirezazd/minimal-tts/releases/latest) and
+run it. It installs for your user only — no admin prompt — adds a Start Menu
+entry, and uninstalls from *Settings → Apps*. Running a newer setup upgrades in
+place.
+
+Prefer no install? The `-windows.zip` is the same app, portable: extract it
+anywhere and run `minimal-tts.exe`.
+
+For the CLI, use `minimal-tts-cli.exe` from a terminal: it's the same program,
+built as a console app so the shell waits for it and shows its output.
+
 ## CLI
 
 Launched bare it opens the app; given a file, `-`, or a literal string it
@@ -56,6 +70,16 @@ cargo run --release
 ./scripts/build-appimage.sh                 # -> dist/
 ```
 
+On Windows, with Rust and the Visual Studio C++ build tools installed:
+
+```powershell
+bash scripts/get-models.sh                  # Git Bash
+./scripts/build-windows.ps1                 # needs Inno Setup 6; -> dist/ (setup + zip)
+```
+
+`cargo run --release` works too, once `vendor/` holds `libespeak-ng.dll` and
+`espeak-ng-data` (the build script puts them there).
+
 ## Configuration
 
 | Variable | Effect |
@@ -65,8 +89,9 @@ cargo run --release
 | `MTTS_ESPEAK_LIB` / `MTTS_ESPEAK_DATA` | Explicit espeak-ng library / data paths |
 
 - State (text, voice, speed, resume position) → `~/.config/minimal-tts/state.json`
-- Pronunciation overrides → `~/.config/minimal-tts/lexicon.tsv`
-- Audio exports → `~/Downloads`
+  (`%APPDATA%\minimal-tts\` on Windows)
+- Pronunciation overrides → `lexicon.tsv` in the same directory
+- Audio exports → your Downloads folder
 
 ### Voices
 
@@ -82,7 +107,7 @@ pub const CUSTOM_VOICES: &[(&str, &[(&str, f32)])] =
 ### Pronunciation
 
 Names, acronyms and jargon that espeak mangles can be respelled once in
-`~/.config/minimal-tts/lexicon.tsv` — one `term<TAB>respelling` per line:
+`lexicon.tsv` in the config directory above — one `term<TAB>respelling` per line:
 
 ```tsv
 kubectl	koob cuttle

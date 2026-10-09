@@ -162,16 +162,10 @@ pub fn models_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("models"))
 }
 
-/// `$XDG_<var>_HOME` with the conventional `$HOME/<fallback>` default.
-pub fn xdg_dir(var: &str, home_fallback: &str) -> PathBuf {
-    std::env::var(var).map(PathBuf::from).unwrap_or_else(|_| {
-        PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(home_fallback)
-    })
-}
-
-/// Our directory under the XDG config home (state.json, lexicon.tsv).
+/// Our config directory (state.json, lexicon.tsv): `$XDG_CONFIG_HOME` or
+/// `~/.config` on Linux, `%APPDATA%` on Windows.
 pub fn config_dir() -> PathBuf {
-    xdg_dir("XDG_CONFIG_HOME", ".config").join("minimal-tts")
+    dirs::config_dir().unwrap_or_default().join("minimal-tts")
 }
 
 /// The one WAV format everything writes: 16-bit mono at the model's rate.
