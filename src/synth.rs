@@ -505,6 +505,9 @@ impl Synthesizer {
     /// Synthesize one sentence/utterance. Returns raw f32 samples at 24 kHz
     /// plus word timings mapped to byte offsets of `text`.
     pub fn synthesize(&mut self, text: &str, voice: &str, speed: f32) -> Result<(Vec<f32>, Vec<WordTiming>)> {
+        // same byte offsets as `text`, so timings still point into the original
+        let masked = crate::markdown::mask(text);
+        let text = masked.as_str();
         let phonemes = self.g2p.phonemize(text)?;
         if phonemes.is_empty() {
             bail!("no speakable content");
