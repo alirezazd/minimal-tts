@@ -11,6 +11,7 @@
 mod app;
 mod audio;
 mod g2p;
+mod markdown;
 mod synth;
 mod tidy;
 
